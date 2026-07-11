@@ -7,6 +7,29 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ---
 
+## [1.1.0] – 2026-07-11
+
+### Added
+- **Visuelle Tabellen-Style-Vorschau** in der GUI
+  - Zeigt eine Echtzeit-Vorschau des ausgewählten Tabellen-Styles
+  - Verwendet Word-CopyAsPicture + Win32-API (GetClipboardData/CopyEnhMetaFile)
+  - Extrahiert Enhanced Metafile direkt aus der Zwischenablage (kein HTML-Umweg)
+  - Mit Retry-Logik bei Timing-Problemen
+  - Gecacht für sofortigen Wechsel zwischen bereits geladenen Styles
+- Persistente Word-Instanz für die Vorschau (startet nur einmal, wird für alle Previews wiederverwendet)
+
+### Fixed
+- Pipeline-Leaks in `Write-Log` und `Show-TableStylePreview` unterdrückt (`| Out-Null`)
+- `SelectionChanged`-Event bei editable ComboBox durch `DropDownClosed` ergänzt
+- Word-Speicherdialog bei `Quit()` unterdrückt (`wdDoNotSaveChanges = 0`)
+
+### Changed
+- Timing optimiert: kürzere Sleeps (150–200ms statt 300–400ms)
+- Log-Fenster in die linke Spalte verschoben, nimmt gesamte Resthöhe ein
+- `Gdi32Helper` als separaten `Add-Type` für `DeleteObject`
+
+---
+
 ## [1.0.0] – 2026-07-10
 
 ### Added

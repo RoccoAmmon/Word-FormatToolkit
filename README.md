@@ -1,9 +1,9 @@
-# 📄 Word-Format-Toolkit v1.0
+# 📄 Word-Format-Toolkit v1.1
 
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)](https://docs.microsoft.com/en-us/powershell/)
 [![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)](https://www.microsoft.com/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.0.0-purple)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.1.0-purple)](CHANGELOG.md)
 
 > **Batch-Formatierung und Qualitätssicherung für Microsoft Word-Dokumente**  
 > PowerShell-WPF-Tool zur automatisierten Reparatur von Überschriften, Tabellen, Nummerierungen und Links in Word-Dokumenten (.docx/.doc).
@@ -43,8 +43,9 @@
 - Entfernt diese, wenn automatische Nummerierung aktiv ist
 - Verhindert doppelte Darstellung („1.1 1.1 Einleitung")
 
-### 📊 Tabellen-Formatierung
+### 📊 Tabellen-Formatierung & Vorschau
 - Wähle einen beliebigen Tabellen-Style aus der gewählten Vorlage (.dotx/.dotm)
+- **Visuelle Echtzeit-Vorschau** des ausgewählten Styles direkt in der GUI
 - Alle Tabellen im Dokument erhalten einheitlich diesen Style
 - Automatische Aktivierung von Heading Rows, First Column, Row Bands
 - Entfernt vorherige direkte Tabellen-Formatierungen
@@ -126,7 +127,7 @@ Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope CurrentUser
 |---------|-------------|
 | **📁 Dokumente** | Liste der zu verarbeitenden Dateien – via ➕/📂/➖ verwalten |
 | **📋 Vorlage** | Auswahl einer `.dotx`/`.dotm` – sucht automatisch in Registry + bekannten Pfaden |
-| **📊 Tabellen-Style** | Alle verfügbaren Tabellen-Styles aus der gewählten Vorlage |
+| **📊 Tabellen-Style** | Alle verfügbaren Tabellen-Styles aus der gewählten Vorlage – mit **visueller Vorschau** |
 | **⚙️ Aktionen** | Checkboxen zum Aktivieren/Deaktivieren einzelner Reparaturen |
 | **📋 Live-Log** | Farbcodiertes Log (INFO/WARN/ERROR/SUCCESS/STEP) |
 | **📈 Fortschritt** | Fortschrittsbalken + Status-Text |

@@ -19,6 +19,7 @@
     - Inhaltsverzeichnis-Update (TOC, Abbildungsverzeichnisse, Felder)
     - Link-Prüfer (tote Hyperlinks & Querverweise)
     - Manuelle Nummerierung erkennen
+    - Visuelle Tabellen-Style-Vorschau (Win32-Clipboard + EMF-Export)
     - HTML-Vergleichsbericht (Vorher/Nachher)
     - Automatische Vorlagen-Suche in Registry + bekannten Pfaden
     - Aufräum-Routine für Logs, Reports und Backups
@@ -34,7 +35,7 @@
 .NOTES
     Autor   : Rocco Ammon
     Erstellt: 2026-06-10
-    Version : 1.0.0
+    Version : 1.1.0
     Lizenz  : MIT
     Aufruf  : .\WordFormatTool-GUI.ps1
     Wiki    : https://github.com/RoccoAmmon/Word-FormatToolkit/wiki
@@ -66,6 +67,9 @@ $Global:WdConst = @{
     BorderHorizontal=-5; BorderVertical=-6; BorderDiagonalDown=-7; BorderDiagonalUp=-8
 }
 
+# Cache für Tabellen-Style-Vorschauen
+$Global:StylePreviewCache = @{}
+
 # Synchronisierter Zustand für Worker <-> GUI
 $Global:Sync = [hashtable]::Synchronized(@{
     CancelRequested = $false
@@ -94,7 +98,7 @@ Add-Type -AssemblyName WindowsBase
 function Write-Log {
     param(
         [Parameter(Mandatory=$true)][string]$Message,
-        [ValidateSet("INFO","WARN","ERROR","SUCCESS","STEP")][string]$Level="INFO"
+        [ValidateSet("INFO","WARN","ERROR","SUCCESS","STEP","DEBUG")][string]$Level="INFO"
     )
     $ts = (Get-Date).ToString("HH:mm:ss")
     $entry = "[$ts] [$Level] $Message"
@@ -104,15 +108,15 @@ function Write-Log {
         try {
             $color = switch ($Level) {
                 "ERROR" {"#D13438"} "WARN" {"#CA5010"} "SUCCESS" {"#107C10"}
-                "STEP" {"#0078D4"} default {"#333333"}
+                "STEP" {"#0078D4"} "DEBUG" {"#767676"} default {"#333333"}
             }
             $para = New-Object System.Windows.Documents.Paragraph
             $para.Margin = "0"
             if ($Level -eq "STEP") { $para.Margin = "15,0,0,0" }
             $run = New-Object System.Windows.Documents.Run($entry)
             $run.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString($color)
-            $para.Inlines.Add($run)
-            $Global:UI.LogBox.Document.Blocks.Add($para)
+            $para.Inlines.Add($run) | Out-Null
+            $Global:UI.LogBox.Document.Blocks.Add($para) | Out-Null
             $Global:UI.LogBox.ScrollToEnd()
             [System.Windows.Forms.Application]::DoEvents()
         } catch { }
@@ -286,7 +290,7 @@ function Get-TemplateStyles {
         try { if ($word) { $word.Quit() | Out-Null } } catch { }
         try { if ($doc) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($doc) | Out-Null } } catch { }
         try { if ($word) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($word) | Out-Null } } catch { }
-        [GC]::Collect(); [GC]::WaitForFinalizers()
+        [GC]::Collect(); [GC]::WaitForPendingFinalizers()
     }
 
     $result.TableStyles  = @($result.TableStyles | Sort-Object -Unique)
@@ -896,8 +900,244 @@ $rows
 }
 
 # ============================================================================
-# BATCH IM HINTERGRUND-RUNSPACE STARTEN
+# Win32-API Helper für Enhanced-Metafile aus Clipboard
 # ============================================================================
+# Umgeht das Problem, dass .NETs Clipboard.GetDataPresent() für Metafile-
+# Formate false zurückliefert, obwohl GetFormats() sie auflistet.
+if (-not ([System.Management.Automation.PSTypeName]'ClipboardEmfReader').Type) {
+    Add-Type -ReferencedAssemblies "System.Drawing" -ErrorAction Stop -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class ClipboardEmfReader {
+    [DllImport("user32.dll")] static extern bool OpenClipboard(IntPtr hWndNewOwner);
+    [DllImport("user32.dll")] static extern bool CloseClipboard();
+    [DllImport("user32.dll")] static extern IntPtr GetClipboardData(uint uFormat);
+    [DllImport("gdi32.dll")] static extern IntPtr CopyEnhMetaFile(IntPtr hemfSrc, string lpszFile);
+    [DllImport("gdi32.dll")] static extern IntPtr DeleteEnhMetaFile(IntPtr hemf);
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr hObject);
+    [DllImport("kernel32.dll")] static extern uint GetLastError();
+    const uint CF_ENHMETAFILE = 14;
+
+    /// <summary>Speichert das Enhanced Metafile aus der Zwischenablage als .emf-Datei.</summary>
+    /// <param name="filePath">Zielpfad für die .emf-Datei</param>
+    /// <returns>true bei Erfolg, false wenn kein Metafile verfügbar</returns>
+    public static bool SaveToFile(string filePath) {
+        if (!OpenClipboard(IntPtr.Zero)) {
+            System.Diagnostics.Debug.WriteLine("OpenClipboard failed: " + GetLastError());
+            return false;
+        }
+        try {
+            IntPtr hemf = GetClipboardData(CF_ENHMETAFILE);
+            if (hemf == IntPtr.Zero) {
+                System.Diagnostics.Debug.WriteLine("GetClipboardData(CF_ENHMETAFILE) returned null");
+                return false;
+            }
+            IntPtr copy = CopyEnhMetaFile(hemf, filePath);
+            if (copy == IntPtr.Zero) {
+                System.Diagnostics.Debug.WriteLine("CopyEnhMetaFile failed: " + GetLastError());
+                return false;
+            }
+            DeleteEnhMetaFile(copy);
+            return true;
+        } finally { CloseClipboard(); }
+    }
+}
+"@
+}
+
+# Separater Helper für DeleteObject (GDI), damit er unabhängig vom
+# ClipboardEmfReader-Typ immer frisch kompiliert wird.
+if (-not ([System.Management.Automation.PSTypeName]'Gdi32Helper').Type) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class Gdi32Helper {
+    [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr hObject);
+}
+"@
+}
+
+# ============================================================================
+# Globales Word-Objekt für die Vorschau (wiederverwendet, nicht jedes Mal neu)
+# ============================================================================
+$Global:PreviewWordInstance = $null
+
+# ============================================================================
+# TABELLEN-STYLE VORSCHAU (mit Word COM + Win32-Clipboard)
+# ============================================================================
+function Show-TableStylePreview {
+    <#
+    .SYNOPSIS
+        Erzeugt eine visuelle Vorschau des ausgewählten Tabellen-Styles.
+    .NOTES
+        Vorgehen:
+          1. CopyAsPicture() – Tabelle als Enhanced Metafile in Zwischenablage
+          2. ClipboardEmfReader.SaveToFile() – speichert EMF via Win32-API
+          3. Image.FromFile() → BitmapSource
+        Vermeidet sowohl .NET-Clipboard-Limitierungen als auch Paste-Probleme.
+    #>
+    param([string]$StyleName, [string]$TemplatePath = "")
+
+    if ([string]::IsNullOrWhiteSpace($StyleName)) { return $null }
+
+    $cacheKey = "$TemplatePath|$StyleName"
+    if ($Global:StylePreviewCache.ContainsKey($cacheKey)) {
+        return $Global:StylePreviewCache[$cacheKey]
+    }
+
+    $word = $null; $doc = $null; $image = $null
+    $tempDir = $null; $emfPath = $null
+    try {
+        # Word-Instanz einmal starten und wiederverwenden
+        if (-not $Global:PreviewWordInstance) {
+            Write-Log "Starte Word für Vorschau (einmalig)..." -Level DEBUG
+            $Global:PreviewWordInstance = New-Object -ComObject Word.Application
+            $Global:PreviewWordInstance.Visible = $false
+            $Global:PreviewWordInstance.DisplayAlerts = 0
+        }
+        $word = $Global:PreviewWordInstance
+
+        $doc = $word.Documents.Add()
+        if (-not [string]::IsNullOrWhiteSpace($TemplatePath) -and (Test-Path $TemplatePath)) {
+            $doc.AttachedTemplate = $TemplatePath; $doc.UpdateStyles()
+        }
+
+        # Muster-Tabelle 4x3
+        $r = $doc.Range(); $r.Text = "Vorschau: $StyleName`r"
+        $r.ParagraphFormat.SpaceAfter = 4
+        $t = $doc.Tables.Add($r, 4, 3); $t.Range.Font.Size = 9; $t.Range.Font.Name = "Calibri"
+        $t.Cell(1,1).Range.Text = "Pos."; $t.Cell(1,2).Range.Text = "Bezeichnung"
+        $t.Cell(1,3).Range.Text = "Wert"; $t.Cell(2,1).Range.Text = "1"
+        $t.Cell(2,2).Range.Text = "Projekt A"; $t.Cell(2,3).Range.Text = "€ 1.234"
+        $t.Cell(3,1).Range.Text = "2"; $t.Cell(3,2).Range.Text = "Projekt B"
+        $t.Cell(3,3).Range.Text = "€ 5.678"; $t.Cell(4,1).Range.Text = "3"
+        $t.Cell(4,2).Range.Text = "Projekt C"; $t.Cell(4,3).Range.Text = "€ 9.012"
+        $t.Style = $StyleName; $t.ApplyStyleHeadingRows = $true
+        $t.ApplyStyleFirstColumn = $true; $t.ApplyStyleRowBands = $true
+        $t.AutoFitBehavior(2); $t.PreferredWidthType = 2; $t.PreferredWidth = 100
+
+        # ----------------------------------------------------------------
+        # Schritt 1: Tabelle als Bild kopieren (Enhanced Metafile)
+        # ----------------------------------------------------------------
+        Write-Log "CopyAsPicture für $StyleName ..." -Level DEBUG
+        $t.Range.Select() | Out-Null
+        $word.Selection.CopyAsPicture()
+
+        # ----------------------------------------------------------------
+        # Schritt 2: EMF via Win32-API aus Clipboard lesen (mit Retry)
+        # ----------------------------------------------------------------
+        $tempDir = [System.IO.Path]::Combine(
+            [System.IO.Path]::GetTempPath(),
+            "WFT_preview_" + [System.IO.Path]::GetRandomFileName())
+        New-Item -Path $tempDir -ItemType Directory -Force | Out-Null
+        $emfPath = [System.IO.Path]::Combine($tempDir, "preview.emf")
+
+        # Kurz warten bis Clipboard-Daten verfügbar, dann bis zu 3 Versuche
+        Start-Sleep -Milliseconds 150
+        $clipboardOk = $false
+        for ($retry = 0; $retry -lt 3 -and -not $clipboardOk; $retry++) {
+            if ($retry -gt 0) { Start-Sleep -Milliseconds 150 }
+            try { $clipboardOk = [ClipboardEmfReader]::SaveToFile($emfPath) } catch {
+                Write-Log "Clipboard-Win32-Versuch $($retry+1): $($_.Exception.Message)" -Level DEBUG
+            }
+        }
+
+        if ($clipboardOk -and (Test-Path $emfPath) -and ((Get-Item $emfPath).Length -gt 0)) {
+            Write-Log "EMF gespeichert: $(Get-Item $emfPath | Select-Object Length,FullName)" -Level DEBUG
+
+            # EMF als Image laden -> auf Vorschau-Größe skalieren -> BitmapSource
+            $wfImg = [System.Drawing.Image]::FromFile($emfPath)
+            $maxH = 100; $scale = [Math]::Min(1.0, $maxH / $wfImg.Height)
+            $bmpW = [int]($wfImg.Width * $scale); $bmpH = [int]($wfImg.Height * $scale)
+            $bitmap = New-Object System.Drawing.Bitmap($bmpW, $bmpH)
+            $g = [System.Drawing.Graphics]::FromImage($bitmap)
+            $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $g.DrawImage($wfImg, 0, 0, $bmpW, $bmpH); $g.Dispose()
+
+            $hBmp = $bitmap.GetHbitmap()
+            try {
+                $image = [System.Windows.Interop.Imaging]::CreateBitmapSourceFromHBitmap(
+                    $hBmp, [IntPtr]::Zero, [System.Windows.Int32Rect]::Empty,
+                    [System.Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
+                $image.Freeze()
+                Write-Log "Vorschau: $($image.Width)x$($image.Height) (skaliert von $($wfImg.Width)x$($wfImg.Height))" -Level DEBUG
+            } finally { [Gdi32Helper]::DeleteObject($hBmp) | Out-Null }
+            $bitmap.Dispose(); $wfImg.Dispose()
+        } else {
+            Write-Log "EMF nicht verfügbar (clipboardOk=$clipboardOk, pathExists=$(Test-Path $emfPath))" -Level DEBUG
+
+            # ----------------------------------------------------------------
+            # Fallback: CopyAsPicture -> Paste -> CopyAsPicture -> Win32 lesen
+            # ----------------------------------------------------------------
+            Write-Log "Vorschau-Fallback: Paste-Umweg für $StyleName" -Level DEBUG
+            try {
+                $t.Range.Select() | Out-Null; $word.Selection.CopyAsPicture()
+                Start-Sleep -Milliseconds 100
+
+                $pasteDoc = $word.Documents.Add()
+                Start-Sleep -Milliseconds 100
+
+                # Explizit den Dokumentanfang selektieren, damit Paste ein Ziel hat
+                $pasteDoc.Range(0,0).Select()
+                Start-Sleep -Milliseconds 50
+
+                $word.Selection.Paste()
+                Start-Sleep -Milliseconds 200
+
+                # Jetzt das eingefügte Bild nochmal kopieren
+                $word.Selection.CopyAsPicture()
+                Start-Sleep -Milliseconds 200
+
+                $clipboardOk2 = $false
+                for ($retry2 = 0; $retry2 -lt 3 -and -not $clipboardOk2; $retry2++) {
+                    if ($retry2 -gt 0) { Start-Sleep -Milliseconds 150 }
+                    try { $clipboardOk2 = [ClipboardEmfReader]::SaveToFile($emfPath) } catch { }
+                }
+
+                if ($clipboardOk2 -and (Test-Path $emfPath) -and ((Get-Item $emfPath).Length -gt 0)) {
+                    Write-Log "EMF (Fallback) gespeichert" -Level DEBUG
+                    $wfImg2 = [System.Drawing.Image]::FromFile($emfPath)
+                    $maxH2 = 100; $scale2 = [Math]::Min(1.0, $maxH2 / $wfImg2.Height)
+                    $bmpW2 = [int]($wfImg2.Width * $scale2); $bmpH2 = [int]($wfImg2.Height * $scale2)
+                    $bitmap2 = New-Object System.Drawing.Bitmap($bmpW2, $bmpH2)
+                    $g2 = [System.Drawing.Graphics]::FromImage($bitmap2)
+                    $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                    $g2.DrawImage($wfImg2, 0, 0, $bmpW2, $bmpH2); $g2.Dispose()
+                    $hBmp2 = $bitmap2.GetHbitmap()
+                    try {
+                        $image = [System.Windows.Interop.Imaging]::CreateBitmapSourceFromHBitmap(
+                            $hBmp2, [IntPtr]::Zero, [System.Windows.Int32Rect]::Empty,
+                            [System.Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
+                        $image.Freeze()
+                    } finally { [Gdi32Helper]::DeleteObject($hBmp2) | Out-Null }
+                    $bitmap2.Dispose(); $wfImg2.Dispose()
+                }
+
+                try { $pasteDoc.Saved = $true; $pasteDoc.Close(0) } catch { }
+            } catch {
+                Write-Log "Fallback-Fehler: $($_.Exception.Message)" -Level DEBUG
+            }
+        }
+
+        if ($null -ne $image) {
+            $Global:StylePreviewCache[$cacheKey] = $image
+            Write-Log "Vorschau OK: $StyleName" -Level STEP
+        } else {
+            Write-Log "Vorschau FEHLGESCHLAGEN: $StyleName (EMF nicht lesbar)" -Level WARN
+        }
+    }
+    catch {
+        Write-Log "Vorschau-Fehler für '$StyleName': $($_.Exception.Message)" -Level WARN
+    }
+    finally {
+        try { if ($doc) { $doc.Saved = $true; $doc.Close(0) } } catch { }
+        # Word NICHT beenden – Instanz lebt global weiter für nächste Vorschau
+        try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($doc) | Out-Null } catch { }
+        try { if ($tempDir -and (Test-Path $tempDir)) { Remove-Item $tempDir -Recurse -Force } } catch { }
+        [GC]::Collect(); [GC]::WaitForPendingFinalizers()
+    }
+    return $image
+}
 
 # ============================================================================
 # GUI
@@ -910,8 +1150,10 @@ function Show-MainGUI {
         WindowStartupLocation="CenterScreen" Background="#F3F3F3">
     <Grid Margin="15">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,15">
             <TextBlock Text="📄" FontSize="32" Margin="0,0,10,0"/>
@@ -924,15 +1166,23 @@ function Show-MainGUI {
             <Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="1*"/></Grid.ColumnDefinitions>
             <Border Grid.Column="0" Background="White" CornerRadius="8" Padding="12" Margin="0,0,8,0">
                 <Grid>
-                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="180"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Text="📁 Zu verarbeitende Dokumente" FontWeight="Bold" Margin="0,0,0,8"/>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>  <!-- Dateien Header -->
+                        <RowDefinition Height="140"/>   <!-- Datei-Liste -->
+                        <RowDefinition Height="Auto"/>  <!-- Datei-Buttons -->
+                        <RowDefinition Height="Auto"/>  <!-- Log Header -->
+                        <RowDefinition Height="*"/>     <!-- Log Box -->
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="📁 Zu verarbeitende Dokumente" FontWeight="Bold" Margin="0,0,0,6"/>
                     <ListBox Grid.Row="1" x:Name="FileList" SelectionMode="Extended" BorderBrush="#DDD" BorderThickness="1"/>
-                    <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,6,0,8">
                         <Button x:Name="btnAddFiles" Content="➕ Dateien" Width="90" Height="30" Margin="0,0,5,0"/>
                         <Button x:Name="btnAddFolder" Content="📂 Ordner" Width="90" Height="30" Margin="0,0,5,0"/>
                         <Button x:Name="btnRemove" Content="➖ Entfernen" Width="90" Height="30" Margin="0,0,5,0"/>
                         <Button x:Name="btnClear" Content="🗑️ Leeren" Width="80" Height="30"/>
                     </StackPanel>
+                    <TextBlock Grid.Row="3" Text="📋 Verarbeitungs-Log (live)" FontWeight="Bold" Margin="0,0,0,4"/>
+                    <RichTextBox Grid.Row="4" x:Name="LogBox" IsReadOnly="True" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="11" BorderBrush="#DDD" BorderThickness="1" Background="#FCFCFC"/>
                 </Grid>
             </Border>
             <Border Grid.Column="1" Background="White" CornerRadius="8" Padding="12" Margin="8,0,0,0">
@@ -945,7 +1195,13 @@ function Show-MainGUI {
                     </StackPanel>
                     <Separator Margin="0,0,0,6"/>
                     <TextBlock Text="📊 Tabellen-Style" FontWeight="Bold" Margin="0,0,0,2"/>
-                    <ComboBox x:Name="cmbTableStyle" Height="26" Margin="0,0,0,6" IsEditable="True"/>
+                    <ComboBox x:Name="cmbTableStyle" Height="26" Margin="0,0,0,4" IsEditable="True"/>
+                    <Border x:Name="previewBorder" Height="110" BorderBrush="#DDD" BorderThickness="1" CornerRadius="4" Background="#FAFAFA" Margin="0,0,0,4">
+                        <Grid>
+                            <TextBlock x:Name="previewPlaceholder" Text="🔍 Vorschau" Foreground="#AAA" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="11"/>
+                            <Image x:Name="imgStylePreview" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center" MaxHeight="105" Visibility="Collapsed"/>
+                        </Grid>
+                    </Border>
                     <Separator Margin="0,0,0,6"/>
                     <TextBlock Text="⚙️ Aktionen" FontWeight="Bold" Margin="0,0,0,6"/>
                     <CheckBox x:Name="chkHeadings"   Content="📝 Überschriften reparieren" IsChecked="True" Margin="0,3"/>
@@ -970,19 +1226,12 @@ function Show-MainGUI {
                 </StackPanel>
             </Border>
         </Grid>
-        <Border Grid.Row="2" Background="White" CornerRadius="8" Padding="12">
-            <Grid>
-                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-                <TextBlock Grid.Row="0" Text="📋 Verarbeitungs-Log (live)" FontWeight="Bold" Margin="0,0,0,8"/>
-                <RichTextBox Grid.Row="1" x:Name="LogBox" IsReadOnly="True" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="11" BorderBrush="#DDD" BorderThickness="1"/>
-            </Grid>
-        </Border>
-        <Grid Grid.Row="3" Margin="0,10,0,0">
+        <Grid Grid.Row="2" Margin="0,10,0,0">
             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
             <TextBlock Grid.Row="0" x:Name="ProgressText" Text="Bereit." Margin="0,0,0,4" Foreground="#555"/>
             <ProgressBar Grid.Row="1" x:Name="ProgressBar" Height="20" Minimum="0" Maximum="100" Value="0"/>
         </Grid>
-        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
             <Button x:Name="btnReport" Content="📊 Letzten Bericht öffnen" Width="170" Height="36" Margin="0,0,10,0" IsEnabled="False"/>
             <Button x:Name="btnCancel" Content="⏹️ Abbrechen" Width="120" Height="36" Margin="0,0,10,0" Background="#D13438" Foreground="White" FontWeight="Bold" IsEnabled="False"/>
             <Button x:Name="btnStart" Content="🚀 Verarbeitung starten" Width="180" Height="36" Background="#0078D4" Foreground="White" FontWeight="Bold" FontSize="14"/>
@@ -1003,6 +1252,9 @@ function Show-MainGUI {
         chkTOC=$window.FindName("chkTOC"); chkReport=$window.FindName("chkReport"); chkVerbose=$window.FindName("chkVerbose")
         txtCleanLogs=$window.FindName("txtCleanLogs"); txtCleanReports=$window.FindName("txtCleanReports"); txtCleanBackups=$window.FindName("txtCleanBackups")
         btnStart=$window.FindName("btnStart"); btnReport=$window.FindName("btnReport"); btnCancel=$window.FindName("btnCancel")
+        imgStylePreview=$window.FindName("imgStylePreview")
+        previewPlaceholder=$window.FindName("previewPlaceholder")
+        previewBorder=$window.FindName("previewBorder")
     }
     $btnAddFiles=$window.FindName("btnAddFiles"); $btnAddFolder=$window.FindName("btnAddFolder")
     $btnRemove=$window.FindName("btnRemove"); $btnClear=$window.FindName("btnClear")
@@ -1043,17 +1295,33 @@ function Show-MainGUI {
     }
 
     $loadTemplateStyles = {
+        # Cache leeren, da neue Styles geladen werden
+        $Global:StylePreviewCache.Clear()
+        $Global:LastPreviewedStyle = $null   # Vorschau erneut erzwingen
+        if ($Global:UI.imgStylePreview) {
+            $Global:UI.imgStylePreview.Source = $null
+            $Global:UI.imgStylePreview.Visibility = "Collapsed"
+            $Global:UI.previewPlaceholder.Visibility = "Visible"
+        }
+
         $tplPath = & $getSelectedTemplate
         if ([string]::IsNullOrWhiteSpace($tplPath) -or -not (Test-Path $tplPath)) {
             $Global:UI.cmbTableStyle.Items.Clear()
             return
         }
         Write-Log "Lade Styles aus: $([System.IO.Path]::GetFileName($tplPath))" -Level STEP
-        $styles = Get-TemplateStyles -TemplatePath $tplPath
+        try {
+            $styles = Get-TemplateStyles -TemplatePath $tplPath
+        } catch {
+            Write-Log "Fehler beim Laden der Styles: $($_.Exception.Message)" -Level WARN
+            $styles = $null
+        }
 
         # Tabellen-Styles befüllen
         $Global:UI.cmbTableStyle.Items.Clear()
-        foreach ($s in $styles.TableStyles) { [void]$Global:UI.cmbTableStyle.Items.Add($s) }
+        if ($null -ne $styles -and $null -ne $styles.TableStyles) {
+            foreach ($s in $styles.TableStyles) { [void]$Global:UI.cmbTableStyle.Items.Add($s) }
+        }
         # Vorherige Auswahl merken oder ersten passenden Eintrag
         $preTbl = $null
         foreach ($item in $Global:UI.cmbTableStyle.Items) {
@@ -1075,6 +1343,52 @@ function Show-MainGUI {
         if ($Global:UI.cmbTemplate.Items.Count -eq 0) { return }
         & $loadTemplateStyles
     })
+
+    # Vorschau für den ausgewählten Tabellen-Style aktualisieren
+    $updateStylePreview = {
+        $styleName = $Global:UI.cmbTableStyle.Text
+        $tplPath = & $getSelectedTemplate
+
+        # Vermeide Neu-Laden, wenn sich nichts geändert hat
+        $lastKey = "$tplPath|$styleName"
+        if ($Global:LastPreviewedStyle -eq $lastKey) { return }
+        $Global:LastPreviewedStyle = $lastKey
+
+        if ([string]::IsNullOrWhiteSpace($styleName)) {
+            $Global:UI.imgStylePreview.Source = $null
+            $Global:UI.imgStylePreview.Visibility = "Collapsed"
+            $Global:UI.previewPlaceholder.Visibility = "Visible"
+            return
+        }
+
+        # Vorschau im Hintergrund laden (kurz DoEvents für UI-Update)
+        $Global:UI.previewPlaceholder.Text = "⏳ Lade Vorschau..."
+        [System.Windows.Forms.Application]::DoEvents()
+
+        $img = Show-TableStylePreview -StyleName $styleName -TemplatePath $tplPath
+        if ($null -ne $img) {
+            $Global:UI.imgStylePreview.Source = $img
+            $Global:UI.imgStylePreview.Visibility = "Visible"
+            $Global:UI.previewPlaceholder.Visibility = "Collapsed"
+        } else {
+            $Global:UI.imgStylePreview.Source = $null
+            $Global:UI.imgStylePreview.Visibility = "Collapsed"
+            $Global:UI.previewPlaceholder.Text = "🔍 Keine Vorschau"
+            $Global:UI.previewPlaceholder.Visibility = "Visible"
+        }
+    }
+
+    # Tabellen-Style Auswahl-Event (SelectionChanged + DropDownClosed für Editable-ComboBox)
+    $Global:UI.cmbTableStyle.Add_SelectionChanged({
+        if ($Global:UI.cmbTableStyle.Items.Count -eq 0) { return }
+        & $updateStylePreview
+    })
+    $Global:UI.cmbTableStyle.Add_DropDownClosed({
+        & $updateStylePreview
+    })
+
+    # Initiale Vorschau anzeigen (nachdem alle Handler registriert sind)
+    & $updateStylePreview
 
     if (-not [string]::IsNullOrWhiteSpace($PreloadFile) -and (Test-Path $PreloadFile)) { $Global:UI.FileList.Items.Add($PreloadFile) | Out-Null }
     if (-not [string]::IsNullOrWhiteSpace($PreloadFolder) -and (Test-Path $PreloadFolder)) {
@@ -1194,6 +1508,15 @@ function Show-MainGUI {
             $msg+="`n`nVergleichsbericht erstellt. Jetzt öffnen?"
             if ([System.Windows.MessageBox]::Show($msg,"Fertig","YesNo","Information") -eq "Yes") { Start-Process $Global:LastReportPath }
         } else { [System.Windows.MessageBox]::Show($msg,"Fertig","OK","Information")|Out-Null }
+    })
+
+    # Word-Vorschau-Instanz sauber beenden, wenn GUI geschlossen wird
+    $window.Add_Closing({
+        if ($Global:PreviewWordInstance) {
+            try { $Global:PreviewWordInstance.Quit(0) } catch { }
+            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($Global:PreviewWordInstance) | Out-Null } catch { }
+            $Global:PreviewWordInstance = $null
+        }
     })
 
     Close-SplashScreen
