@@ -7,6 +7,25 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ---
 
+## [1.2.0] – 2026-07-25
+
+### Added
+- **Tabellenbeschriftung** – Automatische Beschriftung unter jeder Tabelle
+  - Format: „Tabelle N: Kapitelüberschrift" mit SEQ-Feldfunktion
+  - Kapiteltext aus der letzten Überschrift vor der Tabelle
+  - Vorhandene Beschriftungen werden vor Neuerstellung entfernt
+- **Abbildungsbeschriftung** – Automatische Beschriftung unter jeder Inline-Abbildung
+  - Format: „Abbildung N: Kapitelüberschrift" mit SEQ-Feldfunktion
+  - Vorhandene Beschriftungen werden erkannt und entfernt
+- **Tabellenverzeichnis** erstellen/aktualisieren (nach dem Inhaltsverzeichnis, neue Seite)
+- **Abbildungsverzeichnis** erstellen/aktualisieren (nach dem Tabellenverzeichnis, neue Seite)
+- Null-Prüfung nach `Documents.Open()` – klarere Fehlermeldung bei nicht öffenbaren Dokumenten
+
+### Fixed
+- Schriftgröße wird bei Template-Anwendung bewahrt (Standard-Style Font Name/Size sichern + wiederherstellen)
+
+---
+
 ## [1.1.0] – 2026-07-11
 
 ### Added

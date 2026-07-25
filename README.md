@@ -1,9 +1,9 @@
-# 📄 Word-Format-Toolkit v1.1
+# 📄 Word-Format-Toolkit v1.2
 
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)](https://docs.microsoft.com/en-us/powershell/)
 [![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)](https://www.microsoft.com/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.1.0-purple)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.2.0-purple)](CHANGELOG.md)
 
 > **Batch-Formatierung und Qualitätssicherung für Microsoft Word-Dokumente**  
 > PowerShell-WPF-Tool zur automatisierten Reparatur von Überschriften, Tabellen, Nummerierungen und Links in Word-Dokumenten (.docx/.doc).
@@ -53,8 +53,21 @@
 
 ### 📑 Inhaltsverzeichnis aktualisieren
 - Aktualisiert alle TablesOfContents, TablesOfFigures
+- Erstellt/aktualisiert **Tabellenverzeichnis** (nach dem Inhaltsverzeichnis, neue Seite)
+- Erstellt/aktualisiert **Abbildungsverzeichnis** (nach dem Tabellenverzeichnis, neue Seite)
 - Aktualisiert Kopf- und Fußzeilen-Felder
 - Seitenumbrüche werden neu berechnet (Repaginate)
+
+### 🏷️ Tabellenbeschriftung
+- Fügt unter jeder Tabelle eine nummerierte Beschriftung ein: „Tabelle N: Kapitelüberschrift"
+- Verwendet **SEQ-Feldfunktionen** (fortlaufende Nummerierung, kompatibel mit Tabellenverzeichnis)
+- Kapiteltext wird automatisch aus der letzten Überschrift vor der Tabelle ermittelt
+- Vorhandene Beschriftungen werden erkannt und vor Neuerstellung entfernt (kein Doppeln)
+
+### 🖼️ Abbildungsbeschriftung
+- Fügt unter jeder Inline-Abbildung eine nummerierte Beschriftung ein: „Abbildung N: Kapitelüberschrift"
+- Verwendet **SEQ-Feldfunktionen** (fortlaufende Nummerierung, kompatibel mit Abbildungsverzeichnis)
+- Vorhandene Beschriftungen werden erkannt und vor Neuerstellung entfernt
 
 ### 🔗 Link-Prüfer
 - Prüft alle Hyperlinks auf gültige Ziele

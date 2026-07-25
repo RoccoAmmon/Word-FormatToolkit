@@ -6,8 +6,10 @@
     Ein leistungsstarkes PowerShell-WPF-Tool zur automatisierten Batch-Verarbeitung
     von Word-Dokumenten (.docx/.doc). Es repariert Überschriften, korrigiert
     Levelsprünge, entfernt doppelte Kapitelnummern, formatiert Tabellen nach
-    Vorlagen-Styles, aktualisiert Inhaltsverzeichnisse, prüft auf tote Links und
-    erkennt manuelle Nummerierungen – alles mit Live-Log und Vergleichsbericht.
+    Vorlagen-Styles, fügt Tabellen-/Abbildungsbeschriftungen mit SEQ-Feldfunktionen
+    ein, erstellt Tabellen- und Abbildungsverzeichnisse, aktualisiert
+    Inhaltsverzeichnisse, prüft auf tote Links und erkennt manuelle Nummerierungen
+    – alles mit Live-Log und Vergleichsbericht.
 
     Features:
     - WPF-GUI mit Drag & Drop, Dateiauswahl und Ordner-Import
@@ -16,7 +18,11 @@
     - Levelsprung-Korrektur (automatische Hierarchie-Fix)
     - Doppelte Kapitelnummern entfernen
     - Tabellen-Formatierung nach wählbarem Vorlagen-Style
-    - Inhaltsverzeichnis-Update (TOC, Abbildungsverzeichnisse, Felder)
+    - Tabellenbeschriftung (SEQ-Feld, Kapitelüberschrift als Text)
+    - Abbildungsbeschriftung (SEQ-Feld, Kapitelüberschrift als Text)
+    - Tabellenverzeichnis erstellen/aktualisieren
+    - Abbildungsverzeichnis erstellen/aktualisieren
+    - Inhaltsverzeichnis-Update (TOC, Felder, Kopf-/Fußzeilen)
     - Link-Prüfer (tote Hyperlinks & Querverweise)
     - Manuelle Nummerierung erkennen
     - Visuelle Tabellen-Style-Vorschau (Win32-Clipboard + EMF-Export)
@@ -35,7 +41,7 @@
 .NOTES
     Autor   : Rocco Ammon
     Erstellt: 2026-06-10
-    Version : 1.1.0
+    Version : 1.2.0
     Lizenz  : MIT
     Aufruf  : .\WordFormatTool-GUI.ps1
     Wiki    : https://github.com/RoccoAmmon/Word-FormatToolkit/wiki
@@ -56,7 +62,6 @@ $Global:Config = @{
     LogFolder       = "C:\ScriptLog"
     ReportFolder    = "C:\ScriptLog\Reports"
     VerboseSteps    = $true
-    ExtraTemplateDirs = @("E:\", "\\Server\Vorlagen")
 }
 $Global:LogFile = Join-Path $Global:Config.LogFolder ("WordFormatGUI_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date))
 
@@ -290,7 +295,6 @@ function Get-TemplateStyles {
         try { if ($word) { $word.Quit() | Out-Null } } catch { }
         try { if ($doc) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($doc) | Out-Null } } catch { }
         try { if ($word) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($word) | Out-Null } } catch { }
-        [GC]::Collect(); [GC]::WaitForPendingFinalizers()
     }
 
     $result.TableStyles  = @($result.TableStyles | Sort-Object -Unique)
@@ -301,59 +305,78 @@ function Get-TemplateStyles {
 # ============================================================================
 # VORLAGEN SUCHEN
 # ============================================================================
+function Do-WpfEvents {
+    <#
+    .SYNOPSIS
+        Pumpt die WPF-Dispatcher-Queue, damit UI-Elemente (z.B. Splash-ProgressBar)
+        sich animieren können, während synchroner Operationen.
+    #>
+    $frame = New-Object System.Windows.Threading.DispatcherFrame
+    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvoke(
+        [Action]{ $frame.Continue = $false },
+        [System.Windows.Threading.DispatcherPriority]::Background
+    )
+    [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+}
+
 function Find-WordTemplates {
     $searchDirs = New-Object System.Collections.ArrayList
-    $knownPaths = @(
-        (Join-Path $env:APPDATA "Microsoft\Templates"),
-        (Join-Path $env:APPDATA "Microsoft\Word\STARTUP"),
-        (Join-Path ([Environment]::GetFolderPath("MyDocuments")) "Benutzerdefinierte Office-Vorlagen"),
-        (Join-Path ([Environment]::GetFolderPath("MyDocuments")) "Custom Office Templates"),
-        (Join-Path ${env:ProgramFiles} "Microsoft Office\Templates"),
-        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Office\Templates")
-    )
-    foreach ($p in $knownPaths) { if (-not [string]::IsNullOrWhiteSpace($p)) { [void]$searchDirs.Add($p) } }
+
+    # 1. Registry: PersonalTemplates und SharedTemplates (auch über GPO setzbar)
     try {
         foreach ($ver in @("16.0","15.0","14.0")) {
             $rp = "HKCU:\Software\Microsoft\Office\$ver\Common\General"
-            if (Test-Path $rp) { $wg=(Get-ItemProperty $rp -ErrorAction SilentlyContinue).SharedTemplates; if($wg){[void]$searchDirs.Add($wg)} }
+            if (Test-Path $rp) {
+                $wg = (Get-ItemProperty $rp -ErrorAction SilentlyContinue).SharedTemplates
+                if ($wg) { [void]$searchDirs.Add($wg) }
+            }
             $rp2 = "HKCU:\Software\Microsoft\Office\$ver\Word\Options"
-            if (Test-Path $rp2) { $u=(Get-ItemProperty $rp2 -ErrorAction SilentlyContinue).PersonalTemplates; if($u){[void]$searchDirs.Add($u)} }
+            if (Test-Path $rp2) {
+                $u = (Get-ItemProperty $rp2 -ErrorAction SilentlyContinue).PersonalTemplates
+                if ($u) { [void]$searchDirs.Add($u) }
+            }
         }
     } catch { }
-    foreach ($extra in $Global:Config.ExtraTemplateDirs) { if (-not [string]::IsNullOrWhiteSpace($extra)) { [void]$searchDirs.Add($extra) } }
-    $uniqueDirs = $searchDirs | Select-Object -Unique
+
+    # 2. Benutzerspezifische Vorlagenordner (Profile)
+    foreach ($d in (Get-WordTemplatesFolder)) { [void]$searchDirs.Add($d) }
+
+    $uniqueDirs = $searchDirs | Select-Object -Unique | Where-Object { $_ -match '^C:\\' }
     $found = New-Object System.Collections.ArrayList; $seenFiles = @{}
+
     foreach ($dir in $uniqueDirs) {
         try {
             if (Test-Path $dir) {
                 Update-SplashScreen -Text "Durchsuche: $dir"
-                $depth = if ($Global:Config.ExtraTemplateDirs -contains $dir) {2} else {3}
-                $files = Get-ChildItem -Path $dir -Include "*.dotx","*.dotm" -File -Recurse -Depth $depth -ErrorAction SilentlyContinue |
-                         Where-Object { $_.Name -notlike "~*" -and $_.Name -notlike "Normal.dot*" }
-                foreach ($f in $files) {
-                    if (-not $seenFiles.ContainsKey($f.FullName)) {
-                        $seenFiles[$f.FullName]=$true
-                        [void]$found.Add([PSCustomObject]@{Name=$f.Name;FullPath=$f.FullName;Folder=$f.DirectoryName;Modified=$f.LastWriteTime})
+                Do-WpfEvents
+
+                Get-ChildItem -Path "$dir\*" -Include "*.dotx","*.dotm" -File -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+                    Where-Object {
+                        $_.Name -notlike "~*" -and
+                        $_.Name -notlike "Normal.dot*" -and
+                        -not [string]::IsNullOrWhiteSpace($_.FullName) -and
+                        -not [string]::IsNullOrWhiteSpace($_.Name)
+                    } |
+                    ForEach-Object {
+                        if ($seenFiles.ContainsKey($_.FullName)) { return }
+                        $seenFiles[$_.FullName] = $true
+                        try {
+                            $folder = if ($_.DirectoryName) { $_.DirectoryName } else { [System.IO.Path]::GetDirectoryName($_.FullName) }
+                        } catch { $folder = "" }
+                        $obj = [PSCustomObject]@{
+                            Name     = $_.Name
+                            FullPath = $_.FullName
+                            Folder   = $folder
+                            Modified = $_.LastWriteTime
+                        }
+                        [void]$found.Add($obj)
                     }
-                }
+
+                Do-WpfEvents
             }
         } catch { Write-Log "Verzeichnis nicht durchsuchbar: $dir" -Level WARN }
     }
-    # Stelle sicher, dass der persönliche Vorlagenordner aus der Registry durchsucht wird
-    foreach ($tplDir in (Get-WordTemplatesFolder)) {
-        if (-not $searchDirs.Contains($tplDir) -and (Test-Path $tplDir)) {
-            try {
-                $files = Get-ChildItem -Path $tplDir -Include "*.dotx","*.dotm" -File -ErrorAction SilentlyContinue |
-                         Where-Object { $_.Name -notlike "~*" -and $_.Name -notlike "Normal.dot*" }
-                foreach ($f in $files) {
-                    if (-not $seenFiles.ContainsKey($f.FullName)) {
-                        $seenFiles[$f.FullName]=$true
-                        [void]$found.Add([PSCustomObject]@{Name=$f.Name;FullPath=$f.FullName;Folder=$f.DirectoryName;Modified=$f.LastWriteTime})
-                    }
-                }
-            } catch { }
-        }
-    }
+
     $result = @($found | Sort-Object Name)
     Write-Log "Vorlagen-Suche: $($result.Count) gefunden." -Level INFO
     return $result
@@ -607,9 +630,15 @@ function Format-Tables {
     $c=$Global:WdConst
     Write-Log "Tabellen-Formatierung gestartet..." -Level INFO
     if (-not [string]::IsNullOrWhiteSpace($Global:Config.TemplatePath) -and (Test-Path $Global:Config.TemplatePath)) {
-        Write-Log "Hänge Vorlage an und aktualisiere Styles..." -Level STEP
+        Write-Log "Hänge Vorlage an und aktualisiere Styles (ohne Standardschrift zu überschreiben)..." -Level STEP
+        $normalStyle = $Document.Styles.Item("Standard")
+        $savedFontName = $normalStyle.Font.Name
+        $savedFontSize = $normalStyle.Font.Size
         $Document.AttachedTemplate=$Global:Config.TemplatePath
         $Document.UpdateStyles()
+        # Standardschrift wiederherstellen, damit nicht die Vorlagen-Schriftart übernommen wird
+        try { $normalStyle.Font.Name = $savedFontName } catch { }
+        try { $normalStyle.Font.Size = $savedFontSize } catch { }
     } else {
         Write-Log "Keine Vorlage gesetzt – verwende dokumenteigene Styles." -Level INFO
     }
@@ -764,6 +793,179 @@ function Invoke-Cleanup {
 }
 
 # ============================================================================
+# ALLE ÜBERSCHRIFTEN SAMMELN (für Beschriftungen)
+# ============================================================================
+function Get-AllHeadings {
+    param($Document)
+    $c = $Global:WdConst
+    $headings = New-Object System.Collections.ArrayList; $seen = @{}
+    for ($n = 1; $n -le 9; $n++) {
+        $styleObj = $null
+        foreach ($base in @("Überschrift $n","Heading $n")) { try { $s = $Document.Styles.Item($base); if ($s) { $styleObj = $s; break } } catch { } }
+        if ($null -eq $styleObj) { continue }
+        $find = $Document.Content.Find; $find.ClearFormatting(); $find.Style = $styleObj; $find.Text = ""; $find.Forward = $true; $find.Wrap = $c.FindStop; $find.Format = $true
+        $cont = $find.Execute(); $loop = 0
+        while ($cont -and $loop -lt 10000) {
+            $loop++
+            try {
+                $r = $find.Parent.Duplicate; $r.Expand($c.Paragraph)
+                if (-not $seen.ContainsKey($r.Start)) {
+                    $seen[$r.Start] = $true
+                    $text = ($r.Text -replace '\r|\n','').Trim()
+                    $headings.Add([PSCustomObject]@{Position = $r.Start; Text = $text}) | Out-Null
+                }
+            } catch { }
+            $find.Parent.Collapse($c.CollapseEnd); $cont = $find.Execute()
+        }
+    }
+    return @($headings | Sort-Object Position)
+}
+
+# ============================================================================
+# TABELLEN-BESCHRIFTUNG HINZUFÜGEN
+# ============================================================================
+function Add-TableCaptions {
+    param($Document)
+    Write-Log "Tabellenbeschriftung gestartet..." -Level INFO
+    $count = 0
+    $total = $Document.Tables.Count
+    if ($total -eq 0) { Write-Log "Keine Tabellen gefunden." -Level STEP; return 0 }
+
+    # Vorhandene Tabellenbeschriftungen löschen (von hinten nach vorne)
+    Write-Log "Entferne vorhandene Tabellenbeschriftungen..." -Level STEP
+    $removed = 0
+    for ($i = $total; $i -ge 1; $i--) {
+        try {
+            $table = $Document.Tables.Item($i)
+            $tableEnd = $table.Range.End
+            # Absatz direkt nach der Tabelle prüfen
+            $nextPara = $Document.Range($tableEnd, $tableEnd)
+            $nextPara.MoveEnd(4, 1) | Out-Null  # wdParagraph=4, 1 Absatz erweitern
+            $paraText = $nextPara.Text -replace '\r|\n', ''
+            # Prüfe ob es eine Tabellenbeschriftung ist (beginnt mit "Tabelle" + Nummer/Feld)
+            if ($paraText -match '^\s*Tabelle\s') {
+                $nextPara.Delete() | Out-Null
+                $removed++
+            }
+        } catch { }
+    }
+    if ($removed -gt 0) { Write-Log "$removed vorhandene Tabellenbeschriftungen entfernt." -Level STEP }
+
+    # Headings neu sammeln (nach dem Löschen, Positionen haben sich geändert)
+    $headings = Get-AllHeadings -Document $Document
+    $total = $Document.Tables.Count
+
+    # Von hinten nach vorne iterieren, damit Positionen stabil bleiben
+    for ($i = $total; $i -ge 1; $i--) {
+        try {
+            $table = $Document.Tables.Item($i)
+            $tableStart = $table.Range.Start
+            $tableEnd = $table.Range.End
+
+            # Letzte Überschrift VOR dem Tabellenanfang finden
+            $headingText = ""
+            foreach ($h in $headings) {
+                if ($h.Position -lt $tableStart) { $headingText = $h.Text } else { break }
+            }
+            if ([string]::IsNullOrWhiteSpace($headingText)) { $headingText = "Abschnitt" }
+
+            $count++
+
+            # Beschriftungstext ohne Nummer einfügen
+            $afterRange = $Document.Range($tableEnd, $tableEnd)
+            $afterRange.Text = "Tabelle : $headingText`r"
+            $afterRange.ParagraphFormat.SpaceAfter = 0
+            $afterRange.ParagraphFormat.SpaceBefore = 0
+            try { $afterRange.Style = $Document.Styles.Item("Beschriftung") } catch {
+                try { $afterRange.Style = $Document.Styles.Item("Caption") } catch { }
+            }
+
+            # SEQ-Feldfunktion für die Nummer einfügen (nach "Tabelle ", vor ":")
+            $fieldRange = $Document.Range($tableEnd + 8, $tableEnd + 8)
+            $field = $Document.Fields.Add($fieldRange, -1, " SEQ Tabelle \* ARABIC ", $false)
+
+            if ($Global:Config.VerboseSteps) { Write-Log "[$count/$total] Tabelle beschriftet: $headingText" -Level STEP }
+        } catch { Write-Log "Fehler bei Tabelle ${i}: $($_.Exception.Message)" -Level WARN }
+    }
+    # Alle SEQ-Felder auf einmal aktualisieren (korrekte Nummerierung)
+    try { $Document.Fields.Update() | Out-Null } catch { }
+    Write-Log "Tabellenbeschriftung: $count hinzugefügt." -Level SUCCESS
+    return $count
+}
+
+# ============================================================================
+# ABBILDUNGS-BESCHRIFTUNG HINZUFÜGEN
+# ============================================================================
+function Add-FigureCaptions {
+    param($Document)
+    Write-Log "Abbildungsbeschriftung gestartet..." -Level INFO
+    $count = 0
+    $total = $Document.InlineShapes.Count
+    if ($total -eq 0) { Write-Log "Keine Inline-Abbildungen gefunden." -Level STEP; return 0 }
+
+    # Vorhandene Abbildungsbeschriftungen löschen (von hinten nach vorne)
+    Write-Log "Entferne vorhandene Abbildungsbeschriftungen..." -Level STEP
+    $removed = 0
+    for ($i = $total; $i -ge 1; $i--) {
+        try {
+            $shape = $Document.InlineShapes.Item($i)
+            $shapeEnd = $shape.Range.End
+            # Absatz direkt nach der Abbildung prüfen
+            $nextPara = $Document.Range($shapeEnd, $shapeEnd)
+            $nextPara.MoveEnd(4, 1) | Out-Null  # wdParagraph=4
+            $paraText = $nextPara.Text -replace '\r|\n', ''
+            # Prüfe ob es eine Abbildungsbeschriftung ist
+            if ($paraText -match '^\s*Abbildung\s') {
+                $nextPara.Delete() | Out-Null
+                $removed++
+            }
+        } catch { }
+    }
+    if ($removed -gt 0) { Write-Log "$removed vorhandene Abbildungsbeschriftungen entfernt." -Level STEP }
+
+    # Headings neu sammeln (nach dem Löschen)
+    $headings = Get-AllHeadings -Document $Document
+    $total = $Document.InlineShapes.Count
+
+    # Von hinten nach vorne iterieren, damit Positionen stabil bleiben
+    for ($i = $total; $i -ge 1; $i--) {
+        try {
+            $shape = $Document.InlineShapes.Item($i)
+            $shapeStart = $shape.Range.Start
+            $shapeEnd = $shape.Range.End
+
+            # Letzte Überschrift VOR der Abbildung finden
+            $headingText = ""
+            foreach ($h in $headings) {
+                if ($h.Position -lt $shapeStart) { $headingText = $h.Text } else { break }
+            }
+            if ([string]::IsNullOrWhiteSpace($headingText)) { $headingText = "Abschnitt" }
+
+            $count++
+
+            # Beschriftungstext ohne Nummer einfügen
+            $afterRange = $Document.Range($shapeEnd, $shapeEnd)
+            $afterRange.Text = "Abbildung : $headingText`r"
+            $afterRange.ParagraphFormat.SpaceAfter = 0
+            $afterRange.ParagraphFormat.SpaceBefore = 0
+            try { $afterRange.Style = $Document.Styles.Item("Beschriftung") } catch {
+                try { $afterRange.Style = $Document.Styles.Item("Caption") } catch { }
+            }
+
+            # SEQ-Feldfunktion für die Nummer einfügen (nach "Abbildung ", vor ":")
+            $fieldRange = $Document.Range($shapeEnd + 10, $shapeEnd + 10)
+            $field = $Document.Fields.Add($fieldRange, -1, " SEQ Abbildung \* ARABIC ", $false)
+
+            if ($Global:Config.VerboseSteps) { Write-Log "[$count/$total] Abbildung beschriftet: $headingText" -Level STEP }
+        } catch { Write-Log "Fehler bei Abbildung ${i}: $($_.Exception.Message)" -Level WARN }
+    }
+    # Alle SEQ-Felder auf einmal aktualisieren (korrekte Nummerierung)
+    try { $Document.Fields.Update() | Out-Null } catch { }
+    Write-Log "Abbildungsbeschriftung: $count hinzugefügt." -Level SUCCESS
+    return $count
+}
+
+# ============================================================================
 # EINZELDOKUMENT VERARBEITEN
 # ============================================================================
 function Invoke-ProcessDocument {
@@ -773,6 +975,7 @@ function Invoke-ProcessDocument {
         Success=$false; Error=""; BackupPath=""
         StatsBefore=$null; StatsAfter=$null
         Headings=0; Levels=0; Duplicates=0; Tables=0; TOC=0
+        TableCaptions=0; FigureCaptions=0
         DeadLinks=0; ManualNum=0; DeadLinkList=@(); ManualNumList=@(); Duration=$null
     }
     $word=$null; $document=$null; $savedOptions=@{}; $startTime=Get-Date
@@ -788,6 +991,7 @@ function Invoke-ProcessDocument {
         $word=New-Object -ComObject Word.Application; $word.Visible=$false; $word.DisplayAlerts=0
         Write-Log "Öffne Dokument..." -Level STEP
         $document=$word.Documents.Open($DocPath)
+        if ($null -eq $document) { throw "Dokument konnte nicht geöffnet werden: $DocPath" }
         Enable-WordTurboMode -WordApp $word -Doc $document -SavedOptions ([ref]$savedOptions)
         Write-Log "Analysiere Dokument (vorher)..." -Level STEP
         $result.StatsBefore=Get-DocumentStats -Document $document
@@ -798,6 +1002,8 @@ function Invoke-ProcessDocument {
         if ($Actions.ManualNum)  { $mn = Test-ManualNumbering -Document $document; $result.ManualNum = $mn.Count; $result.ManualNumList = @($mn) }
         if ($Actions.DeadLinks)  { $dl = Test-DeadLinks -Document $document; $result.DeadLinks = $dl.Count; $result.DeadLinkList = @($dl) }
         if ($Actions.Tables)     { $result.Tables     = Format-Tables -Document $document }
+        if ($Actions.TableCaptions)  { $result.TableCaptions  = Add-TableCaptions -Document $document }
+        if ($Actions.FigureCaptions) { $result.FigureCaptions = Add-FigureCaptions -Document $document }
         if ($Actions.TOC)        { $result.TOC        = Update-DocumentTOC -Document $document }
         Write-Log "Analysiere Dokument (nachher)..." -Level STEP
         $result.StatsAfter=Get-DocumentStats -Document $document
@@ -846,13 +1052,13 @@ function New-ComparisonReport {
             <td class='num'><span class='$( if($b.DuplicateNum -gt 0){"warn-text"} )'>$($b.DuplicateNum)</span> &rarr; <span class='ok-text'>$($a.DuplicateNum)</span></td>
             <td class='num'><span class='$( if($r.ManualNum -gt 0){"warn-text"} )'>$($r.ManualNum)</span></td>
             <td class='num'><span class='$( if($r.DeadLinks -gt 0){"err-text"} )'>$($r.DeadLinks)</span></td>
-            <td class='num'>$($r.Tables)</td><td class='num'>$($r.TOC)</td>
+            <td class='num'>$($r.Tables)</td><td class='num'>$($r.TableCaptions)</td><td class='num'>$($r.FigureCaptions)</td><td class='num'>$($r.TOC)</td>
             <td>$("{0:hh\:mm\:ss}" -f $r.Duration)</td>
         </tr>
 "@
         } else {
             $rows += @"
-        <tr><td>$($r.FileName)</td><td>$badge</td><td colspan='8' class='err-text'>$($r.Error)</td><td>$("{0:hh\:mm\:ss}" -f $r.Duration)</td></tr>
+        <tr><td>$($r.FileName)</td><td>$badge</td><td colspan='11' class='err-text'>$($r.Error)</td><td>$("{0:hh\:mm\:ss}" -f $r.Duration)</td></tr>
 "@
         }
     }
@@ -887,7 +1093,7 @@ tr:hover{background:#f0f8ff}
 <th>Datei</th><th>Status</th><th>Überschr.</th><th>Tabellen</th>
 <th>Levelsprünge<br>(vor&rarr;nach)</th><th>Duplikate<br>(vor&rarr;nach)</th>
 <th>Manuell<br>nummeriert</th><th>Tote<br>Links</th>
-<th>Tab.<br>format.</th><th>TOC</th><th>Dauer</th>
+<th>Tab.<br>format.</th><th>Tab.<br>Beschr.</th><th>Abb.<br>Beschr.</th><th>TOC</th><th>Dauer</th>
 </tr></thead><tbody>
 $rows
 </tbody></table>
@@ -1211,6 +1417,8 @@ function Show-MainGUI {
                     <CheckBox x:Name="chkDeadLinks"  Content="🔗 Tote Links prüfen" Margin="0,3"/>
                     <CheckBox x:Name="chkTables"     Content="📊 Tabellen formatieren" IsChecked="True" Margin="0,3"/>
                     <CheckBox x:Name="chkTOC"        Content="📑 Inhaltsverzeichnis updaten" IsChecked="True" Margin="0,3"/>
+                    <CheckBox x:Name="chkTableCaptions" Content="🏷️ Tabellenbeschriftung" IsChecked="True" Margin="0,3"/>
+                    <CheckBox x:Name="chkFigureCaptions" Content="🖼️ Abbildungsbeschriftung" IsChecked="True" Margin="0,3"/>
                     <Separator Margin="0,6"/>
                     <CheckBox x:Name="chkReport"     Content="📈 Vergleichsbericht" IsChecked="True" Margin="0,3"/>
                     <CheckBox x:Name="chkVerbose"    Content="🔍 Detaillierte Schritte" IsChecked="True" Margin="0,3"/>
@@ -1250,6 +1458,7 @@ function Show-MainGUI {
         chkDuplicates=$window.FindName("chkDuplicates"); chkManualNum=$window.FindName("chkManualNum")
         chkDeadLinks=$window.FindName("chkDeadLinks"); chkTables=$window.FindName("chkTables")
         chkTOC=$window.FindName("chkTOC"); chkReport=$window.FindName("chkReport"); chkVerbose=$window.FindName("chkVerbose")
+        chkTableCaptions=$window.FindName("chkTableCaptions"); chkFigureCaptions=$window.FindName("chkFigureCaptions")
         txtCleanLogs=$window.FindName("txtCleanLogs"); txtCleanReports=$window.FindName("txtCleanReports"); txtCleanBackups=$window.FindName("txtCleanBackups")
         btnStart=$window.FindName("btnStart"); btnReport=$window.FindName("btnReport"); btnCancel=$window.FindName("btnCancel")
         imgStylePreview=$window.FindName("imgStylePreview")
@@ -1264,13 +1473,24 @@ function Show-MainGUI {
 
     $fillTemplates={
         $Global:UI.cmbTemplate.Items.Clear()
-        foreach ($t in (Find-WordTemplates)) {
+        $Global:UI.ProgressText.Text = "Suche Vorlagen..."
+        $templates = Find-WordTemplates
+        $Global:UI.ProgressText.Text = "$($templates.Count) Vorlagen gefunden."
+        [System.Windows.Forms.Application]::DoEvents()
+        foreach ($t in $templates) {
+            try {
+                $displayName = if ([string]::IsNullOrWhiteSpace($t.Name)) { [System.IO.Path]::GetFileName($t.FullPath) } else { $t.Name }
+                $displayFolder = if ([string]::IsNullOrWhiteSpace($t.Folder)) { [System.IO.Path]::GetDirectoryName($t.FullPath) } else { $t.Folder }
+            } catch {
+                Write-Log "Überspringe Vorlage mit ungültigem Pfad: $($t.FullPath)" -Level WARN
+                continue
+            }
+            if ([string]::IsNullOrWhiteSpace($displayName)) { continue }
             $item=New-Object System.Windows.Controls.ComboBoxItem
-            $item.Content="$($t.Name)   —   $($t.Folder)"; $item.Tag=$t.FullPath; $item.ToolTip=$t.FullPath
+            $item.Content="$displayName   —   $displayFolder"; $item.Tag=$t.FullPath; $item.ToolTip=$t.FullPath
             [void]$Global:UI.cmbTemplate.Items.Add($item)
         }
         if ($Global:UI.cmbTemplate.Items.Count -gt 0) {
-            # Vorherige Auswahl merken (z.B. nach Rescan)
             $pre=$null
             if (-not [string]::IsNullOrWhiteSpace($Global:Config.TemplatePath)) {
                 foreach ($it in $Global:UI.cmbTemplate.Items) {
@@ -1280,7 +1500,6 @@ function Show-MainGUI {
             if ($pre) { $Global:UI.cmbTemplate.SelectedItem=$pre }
             else { $Global:UI.cmbTemplate.SelectedIndex=0 }
         } else {
-            # Keine Vorlage gefunden – Standard-Ordner als Text vorschlagen
             $defaultFolders = Get-WordTemplatesFolder
             $Global:UI.cmbTemplate.Text = if ($defaultFolders.Count -gt 0) { $defaultFolders[0] } else { "" }
             $Global:UI.cmbTemplate.ToolTip = "Keine Vorlagen gefunden. Bitte Pfad eingeben oder durchsuchen."
@@ -1309,6 +1528,8 @@ function Show-MainGUI {
             $Global:UI.cmbTableStyle.Items.Clear()
             return
         }
+        $Global:UI.ProgressText.Text = "Lade Styles aus $([System.IO.Path]::GetFileName($tplPath))..."
+        [System.Windows.Forms.Application]::DoEvents()
         Write-Log "Lade Styles aus: $([System.IO.Path]::GetFileName($tplPath))" -Level STEP
         try {
             $styles = Get-TemplateStyles -TemplatePath $tplPath
@@ -1331,7 +1552,8 @@ function Show-MainGUI {
         elseif ($Global:UI.cmbTableStyle.Items.Count -gt 0) { $Global:UI.cmbTableStyle.SelectedIndex = 0 }
         else { $Global:UI.cmbTableStyle.Text = $Global:Config.TableStyleName }
 
-
+        $Global:UI.ProgressText.Text = "$($Global:UI.cmbTableStyle.Items.Count) Tabellen-Styles geladen."
+        [System.Windows.Forms.Application]::DoEvents()
     }
 
     & $fillTemplates
@@ -1363,6 +1585,7 @@ function Show-MainGUI {
 
         # Vorschau im Hintergrund laden (kurz DoEvents für UI-Update)
         $Global:UI.previewPlaceholder.Text = "⏳ Lade Vorschau..."
+        $Global:UI.ProgressText.Text = "Erzeuge Vorschau für Style '$styleName'..."
         [System.Windows.Forms.Application]::DoEvents()
 
         $img = Show-TableStylePreview -StyleName $styleName -TemplatePath $tplPath
@@ -1370,11 +1593,13 @@ function Show-MainGUI {
             $Global:UI.imgStylePreview.Source = $img
             $Global:UI.imgStylePreview.Visibility = "Visible"
             $Global:UI.previewPlaceholder.Visibility = "Collapsed"
+            $Global:UI.ProgressText.Text = "Vorschau erstellt."
         } else {
             $Global:UI.imgStylePreview.Source = $null
             $Global:UI.imgStylePreview.Visibility = "Collapsed"
             $Global:UI.previewPlaceholder.Text = "🔍 Keine Vorschau"
             $Global:UI.previewPlaceholder.Visibility = "Visible"
+            $Global:UI.ProgressText.Text = "Keine Vorschau verfügbar."
         }
     }
 
@@ -1444,6 +1669,7 @@ function Show-MainGUI {
             Headings=$Global:UI.chkHeadings.IsChecked; Levels=$Global:UI.chkLevels.IsChecked
             Duplicates=$Global:UI.chkDuplicates.IsChecked; ManualNum=$Global:UI.chkManualNum.IsChecked
             DeadLinks=$Global:UI.chkDeadLinks.IsChecked; Tables=$Global:UI.chkTables.IsChecked; TOC=$Global:UI.chkTOC.IsChecked
+            TableCaptions=$Global:UI.chkTableCaptions.IsChecked; FigureCaptions=$Global:UI.chkFigureCaptions.IsChecked
         }
         if (-not ($actions.Values -contains $true)) { [System.Windows.MessageBox]::Show("Bitte mindestens eine Aktion wählen!","Hinweis","OK","Warning")|Out-Null; return }
         if ($actions.Tables -and (-not (Test-Path $Global:Config.TemplatePath))) { [System.Windows.MessageBox]::Show("Vorlage nicht gefunden!","Vorlage fehlt","OK","Warning")|Out-Null; return }
@@ -1520,6 +1746,9 @@ function Show-MainGUI {
     })
 
     Close-SplashScreen
+    $window.Topmost = $true
+    $window.Activate()
+    [System.Windows.Forms.Application]::DoEvents()
     $window.ShowDialog() | Out-Null
 }
 
