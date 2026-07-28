@@ -1,9 +1,9 @@
-# 📄 Word-Format-Toolkit v1.2
+# 📄 Word-Format-Toolkit v1.3
 
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)](https://docs.microsoft.com/en-us/powershell/)
 [![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)](https://www.microsoft.com/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.2.0-purple)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.3.0-purple)](CHANGELOG.md)
 
 > **Batch-Formatierung und Qualitätssicherung für Microsoft Word-Dokumente**  
 > PowerShell-WPF-Tool zur automatisierten Reparatur von Überschriften, Tabellen, Nummerierungen und Links in Word-Dokumenten (.docx/.doc).
@@ -55,6 +55,7 @@
 - Aktualisiert alle TablesOfContents, TablesOfFigures
 - Erstellt/aktualisiert **Tabellenverzeichnis** (nach dem Inhaltsverzeichnis, neue Seite)
 - Erstellt/aktualisiert **Abbildungsverzeichnis** (nach dem Tabellenverzeichnis, neue Seite)
+- Bestehende Verzeichnisse werden gelöscht und neu erstellt – immer auf neuer Seite
 - Aktualisiert Kopf- und Fußzeilen-Felder
 - Seitenumbrüche werden neu berechnet (Repaginate)
 
@@ -67,6 +68,7 @@
 ### 🖼️ Abbildungsbeschriftung
 - Fügt unter jeder Inline-Abbildung eine nummerierte Beschriftung ein: „Abbildung N: Kapitelüberschrift"
 - Verwendet **SEQ-Feldfunktionen** (fortlaufende Nummerierung, kompatibel mit Abbildungsverzeichnis)
+- Beschriftung steht im eigenen Absatz – das Bild erscheint nicht im Abbildungsverzeichnis
 - Vorhandene Beschriftungen werden erkannt und vor Neuerstellung entfernt
 
 ### 🔗 Link-Prüfer
