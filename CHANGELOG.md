@@ -7,6 +7,20 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ---
 
+## [1.3.0] – 2026-07-28
+
+### Fixed
+- **Seitenumbruch vor Tabellen-/Abbildungsverzeichnis** – `PageBreakBefore` auf der Überschrift statt Formfeed-Zeichen
+- **Bestehende Verzeichnisse** werden jetzt gelöscht und neu erstellt (mit korrektem Seitenumbruch)
+- **Abbildungsbeschriftung im eigenen Absatz** – Bild erscheint nicht mehr im Abbildungsverzeichnis
+- **Einheitliche Schriftgröße** bei Abbildungsbeschriftungen (Stil nur auf Beschriftungs-Absatz angewandt)
+- **Keine Leerzeilen** mehr nach Abbildungsbeschriftungen
+
+### Changed
+- Erkennung bestehender Verzeichnisse per Feldcode-Regex (`\c "Tabelle"` / `\c "Abbildung"`)
+
+---
+
 ## [1.2.0] – 2026-07-25
 
 ### Added

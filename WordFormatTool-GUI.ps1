@@ -41,7 +41,7 @@
 .NOTES
     Autor   : Rocco Ammon
     Erstellt: 2026-06-10
-    Version : 1.2.0
+    Version : 1.3.0
     Lizenz  : MIT
     Aufruf  : .\WordFormatTool-GUI.ps1
     Wiki    : https://github.com/RoccoAmmon/Word-FormatToolkit/wiki
@@ -880,6 +880,9 @@ function Add-TableCaptions {
                 try { $afterRange.Style = $Document.Styles.Item("Caption") } catch { }
             }
 
+            # Caption-Label "Tabelle" registrieren
+            try { $null = $Document.CaptionLabels.Add("Tabelle") } catch { }
+
             # SEQ-Feldfunktion für die Nummer einfügen (nach "Tabelle ", vor ":")
             $fieldRange = $Document.Range($tableEnd + 8, $tableEnd + 8)
             $field = $Document.Fields.Add($fieldRange, -1, " SEQ Tabelle \* ARABIC ", $false)
@@ -910,9 +913,11 @@ function Add-FigureCaptions {
         try {
             $shape = $Document.InlineShapes.Item($i)
             $shapeEnd = $shape.Range.End
-            # Absatz direkt nach der Abbildung prüfen
+            # Absatz NACH der Abbildung prüfen (Beschriftung steht im eigenen Absatz)
             $nextPara = $Document.Range($shapeEnd, $shapeEnd)
-            $nextPara.MoveEnd(4, 1) | Out-Null  # wdParagraph=4
+            $nextPara.MoveEnd(4, 1) | Out-Null  # wdParagraph=4, Ende des Bild-Absatzes
+            $nextPara.Collapse(0)   # ans Ende des Bild-Absatzes (wdCollapseEnd=0)
+            $nextPara.MoveEnd(4, 1) | Out-Null  # Ende des nächsten Absatzes (Beschriftung)
             $paraText = $nextPara.Text -replace '\r|\n', ''
             # Prüfe ob es eine Abbildungsbeschriftung ist
             if ($paraText -match '^\s*Abbildung\s') {
@@ -944,7 +949,9 @@ function Add-FigureCaptions {
             $count++
 
             # Beschriftungstext ohne Nummer einfügen
-            $afterRange = $Document.Range($shapeEnd, $shapeEnd)
+            # Beschriftung nach dem gesamten Bild-Absatz einfügen (eigener Absatz)
+            $paraEnd = $shape.Range.Paragraphs(1).Range.End
+            $afterRange = $Document.Range($paraEnd, $paraEnd)
             $afterRange.Text = "Abbildung : $headingText`r"
             $afterRange.ParagraphFormat.SpaceAfter = 0
             $afterRange.ParagraphFormat.SpaceBefore = 0
@@ -952,8 +959,11 @@ function Add-FigureCaptions {
                 try { $afterRange.Style = $Document.Styles.Item("Caption") } catch { }
             }
 
+            # Caption-Label "Abbildung" registrieren
+            try { $null = $Document.CaptionLabels.Add("Abbildung") } catch { }
+
             # SEQ-Feldfunktion für die Nummer einfügen (nach "Abbildung ", vor ":")
-            $fieldRange = $Document.Range($shapeEnd + 10, $shapeEnd + 10)
+            $fieldRange = $Document.Range($paraEnd + 10, $paraEnd + 10)
             $field = $Document.Fields.Add($fieldRange, -1, " SEQ Abbildung \* ARABIC ", $false)
 
             if ($Global:Config.VerboseSteps) { Write-Log "[$count/$total] Abbildung beschriftet: $headingText" -Level STEP }
@@ -963,6 +973,119 @@ function Add-FigureCaptions {
     try { $Document.Fields.Update() | Out-Null } catch { }
     Write-Log "Abbildungsbeschriftung: $count hinzugefügt." -Level SUCCESS
     return $count
+}
+
+# ============================================================================
+# TABELLEN-/ABBILDUNGSVERZEICHNIS SICHERSTELLEN
+# ============================================================================
+function Ensure-FigureTables {
+    param($Document)
+    $c = $Global:WdConst
+    Write-Log "Prüfe Tabellen-/Abbildungsverzeichnisse..." -Level INFO
+    $created = 0; $updated = 0
+
+    # Alle Felder vorab aktualisieren, damit SEQ-Ergebnisse vorliegen
+    try { $Document.Fields.Update() | Out-Null } catch { }
+
+    # Bestehende Abbildungsverzeichnisse am Feldcode erkennen (\c "Tabelle" / \c "Abbildung")
+    $hasTableVerz = $false; $hasFigureVerz = $false
+
+    foreach ($tof in $Document.TablesOfFigures) {
+        try {
+            $code = ""
+            try {
+                if ($tof.Range.Fields.Count -gt 0) {
+                    $code = $tof.Range.Fields(1).Code.Text
+                }
+            } catch { try { $code = $tof.Range.Fields(1).Code.Text } catch { } }
+
+            if ($code -match '\\c\s+"Tabelle"') {
+                $hasTableVerz = $true
+                try {
+                    $tof.Update(); $tof.UpdatePageNumbers(); $updated++
+                    # Seitenumbruch VOR der Überschrift einfügen
+                    $srch = $Document.Range(0, $tof.Range.Start)
+                    if ($srch.Find.Execute("Tabellenverzeichnis")) {
+                        $pbRng = $Document.Range($srch.Start, $srch.Start)
+                        $null = $pbRng.InsertBreak(7)
+                    }
+                } catch { }
+                Write-Log "Tabellenverzeichnis aktualisiert." -Level STEP
+            }
+            if ($code -match '\\c\s+"Abbildung"') {
+                $hasFigureVerz = $true
+                try {
+                    $tof.Update(); $tof.UpdatePageNumbers(); $updated++
+                    # Seitenumbruch VOR der Überschrift einfügen
+                    $srch = $Document.Range(0, $tof.Range.Start)
+                    if ($srch.Find.Execute("Abbildungsverzeichnis")) {
+                        $pbRng = $Document.Range($srch.Start, $srch.Start)
+                        $null = $pbRng.InsertBreak(7)
+                    }
+                } catch { }
+                Write-Log "Abbildungsverzeichnis aktualisiert." -Level STEP
+            }
+        } catch { }
+    }
+
+    # Position NACH dem letzten Inhaltsverzeichnis (TOC) ermitteln
+    $insertPos = $Document.Content.Start
+    foreach ($toc in $Document.TablesOfContents) {
+        try { if ($toc.Range.End -gt $insertPos) { $insertPos = $toc.Range.End } } catch { }
+    }
+
+    # --- Tabellenverzeichnis (mittels TOC-Feld mit \c "Tabelle") ---
+    if (-not $hasTableVerz) {
+        try {
+            # Caption-Label "Tabelle" registrieren (damit \c funktioniert)
+            try { $null = $Document.CaptionLabels.Add("Tabelle") } catch { }
+
+            $r = $Document.Range($insertPos, $insertPos)
+            $r.Text = "Tabellenverzeichnis`r"
+            try { $r.Style = $Document.Styles.Item("Überschrift 1") } catch { }
+            try { $r.ListFormat.RemoveNumbers() } catch { }
+            try { $r.ParagraphFormat.PageBreakBefore = -1 } catch { }
+            $newPos = $r.End
+            $f = $Document.Fields.Add($Document.Range($newPos, $newPos), -1, " TOC \h \z \c ""Tabelle"" ", $false)
+            try { $null = $f.Update() } catch { }
+            $created++
+            Write-Log "Tabellenverzeichnis erstellt (neue Seite)." -Level SUCCESS
+        } catch { Write-Log "Fehler Tabellenverzeichnis: $($_.Exception.Message)" -Level WARN }
+    }
+
+    # Position erneut ermitteln (falls Tabellenverzeichnis erstellt wurde)
+    $insertPos2 = $Document.Content.Start
+    foreach ($toc in $Document.TablesOfContents) {
+        try { if ($toc.Range.End -gt $insertPos2) { $insertPos2 = $toc.Range.End } } catch { }
+    }
+    foreach ($tof in $Document.TablesOfFigures) {
+        try { if ($tof.Range.End -gt $insertPos2) { $insertPos2 = $tof.Range.End } } catch { }
+    }
+
+    # --- Abbildungsverzeichnis (mittels TOC-Feld mit \c "Abbildung") ---
+    if (-not $hasFigureVerz) {
+        try {
+            # Caption-Label "Abbildung" registrieren (damit \c funktioniert)
+            try { $null = $Document.CaptionLabels.Add("Abbildung") } catch { }
+
+            $r2 = $Document.Range($insertPos2, $insertPos2)
+            $r2.Text = "Abbildungsverzeichnis`r"
+            try { $r2.Style = $Document.Styles.Item("Überschrift 1") } catch { }
+            try { $r2.ListFormat.RemoveNumbers() } catch { }
+            try { $r2.ParagraphFormat.PageBreakBefore = -1 } catch { }
+            $newPos2 = $r2.End
+            $f2 = $Document.Fields.Add($Document.Range($newPos2, $newPos2), -1, " TOC \h \z \c ""Abbildung"" ", $false)
+            try { $null = $f2.Update() } catch { }
+            $created++
+            Write-Log "Abbildungsverzeichnis erstellt (neue Seite)." -Level SUCCESS
+        } catch { Write-Log "Fehler Abbildungsverzeichnis: $($_.Exception.Message)" -Level WARN }
+    }
+
+    # Alle Felder nochmals aktualisieren
+    try { $Document.Fields.Update() | Out-Null } catch { }
+
+    Write-Log "Abbildungs-/Tabellenverzeichnisse: $created erstellt, $updated aktualisiert." -Level SUCCESS
+    return ($created + $updated)
 }
 
 # ============================================================================
@@ -1004,7 +1127,15 @@ function Invoke-ProcessDocument {
         if ($Actions.Tables)     { $result.Tables     = Format-Tables -Document $document }
         if ($Actions.TableCaptions)  { $result.TableCaptions  = Add-TableCaptions -Document $document }
         if ($Actions.FigureCaptions) { $result.FigureCaptions = Add-FigureCaptions -Document $document }
-        if ($Actions.TOC)        { $result.TOC        = Update-DocumentTOC -Document $document }
+        # Tabellen-/Abbildungsverzeichnisse (mit | Select-Object -Last 1 gegen COM-Array-Probleme)
+        $tocCount = 0
+        if ($Actions.TableCaptions -or $Actions.FigureCaptions) {
+            $tocCount = $tocCount + [int](Ensure-FigureTables -Document $document | Select-Object -Last 1)
+        }
+        if ($Actions.TOC) {
+            $tocCount = $tocCount + [int](Update-DocumentTOC -Document $document | Select-Object -Last 1)
+        }
+        $result.TOC = $tocCount
         Write-Log "Analysiere Dokument (nachher)..." -Level STEP
         $result.StatsAfter=Get-DocumentStats -Document $document
         Write-Log "Speichere Dokument..." -Level STEP
