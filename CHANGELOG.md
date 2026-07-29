@@ -7,7 +7,21 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ---
 
-## [1.3.0] – 2026-07-28
+## [1.4.0] – 2026-07-29
+
+### Added
+- **„Standard" aus Vorlage übernehmen** – Die Formatvorlage "Standard" (Normal) wird aus der gewählten .dotx/.dotm-Vorlage in jedes Dokument kopiert. Schriftart, -größe, Absatzformatierung, Sprache u.v.m. werden übernommen
+- **Schutz der ersten Seite** – Beim Standard-Style-Update bleibt die Titelseite (Seite 1) unverändert; ihre originale Formatierung wird gesichert und nach dem Style-Update wiederhergestellt
+- **Splash-Screen mit Live-Status** – Der Start-Splash zeigt jetzt jede Phase an (Vorlagensuche → Styles laden → Bereit), der Titel wechselt dynamisch
+- **Dynamischer Splash-Titel** – Der Fortschrittsbalken animiert dank verbessertem `Do-WpfEvents` (DispatcherTimer 30 ms) jetzt auch während langer Suchläufe
+
+### Fixed
+- **Fenster bleibt im Vordergrund** – `Topmost`-Flag vom Hauptfenster entfernt; das Toolkit verhält sich wie ein normales Fenster
+- **GUI reagiert nicht während Batch** – Zahlreiche `DoEvents()`-Aufrufe in `Invoke-ProcessDocument` eingebaut, damit das Fenster auch während der Verarbeitung minimiert, verschoben oder in den Hintergrund geklickt werden kann
+- **MessageBox geht verloren** – Alle `MessageBox.Show()`-Aufrufe erhalten jetzt das Hauptfenster als Owner, sodass sie nicht hinter anderen Fenstern verschwinden; nach der Batch-Meldung wird das Hauptfenster wieder aktiviert
+- **Alte `Update-StandardStyle`-Funktion** – Doppelte, einfachere Version ohne Seitenschutz entfernt
+
+---
 
 ### Fixed
 - **Seitenumbruch vor Tabellen-/Abbildungsverzeichnis** – `PageBreakBefore` auf der Überschrift statt Formfeed-Zeichen

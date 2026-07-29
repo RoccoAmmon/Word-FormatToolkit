@@ -1,12 +1,12 @@
-# 📄 Word-Format-Toolkit v1.3
+# 📄 Word-Format-Toolkit v1.4
 
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)](https://docs.microsoft.com/en-us/powershell/)
 [![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)](https://www.microsoft.com/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.3.0-purple)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.4.0-purple)](CHANGELOG.md)
 
 > **Batch-Formatierung und Qualitätssicherung für Microsoft Word-Dokumente**  
-> PowerShell-WPF-Tool zur automatisierten Reparatur von Überschriften, Tabellen, Nummerierungen und Links in Word-Dokumenten (.docx/.doc).
+> PowerShell-WPF-Tool zur automatisierten Reparatur von Überschriften, Tabellen, Nummerierungen, Links und Formatvorlagen in Word-Dokumenten (.docx/.doc).
 
 ---
 
@@ -80,6 +80,12 @@
 ### ✏️ Manuelle Nummerierung erkennen
 - Findet Überschriften, die manuell nummeriert wurden (z. B. „3.2.1 Einleitung")
 - Listet diese im Log auf – hilfreich für die Migration auf automatische Nummerierung
+
+### 📄 Formatvorlage „Standard" aus Vorlage übernehmen
+- Kopiert die vollständige Definition der Formatvorlage „Standard" (Normal) aus der gewählten .dotx/.dotm-Vorlage in jedes Dokument
+- Übernimmt Schriftart, -größe, -schnitt, Farbe, Absatzausrichtung, Zeilenabstand, Einzüge, Steuerungsoptionen (Widow/Orphan, Zusammenhalten) und Sprache
+- **Schützt die erste Seite** – die originale Formatierung der Titelseite bleibt erhalten
+- Funktioniert Dokument-übergreifend für konsistente Standardschrift im gesamten Batch
 
 ### 📈 HTML-Vergleichsbericht
 - Automatische Erstellung nach der Batch-Verarbeitung

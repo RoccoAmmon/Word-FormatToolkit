@@ -41,7 +41,7 @@
 .NOTES
     Autor   : Rocco Ammon
     Erstellt: 2026-06-10
-    Version : 1.3.0
+    Version : 1.4.0
     Lizenz  : MIT
     Aufruf  : .\WordFormatTool-GUI.ps1
     Wiki    : https://github.com/RoccoAmmon/Word-FormatToolkit/wiki
@@ -131,7 +131,7 @@ function Write-Log {
 # ============================================================================
 # SPLASH-SCREEN
 # ============================================================================
-$Global:Splash = @{ Window=$null; StatusText=$null }
+$Global:Splash = @{ Window=$null; Title=$null; StatusText=$null }
 function Show-SplashScreen {
     param([string]$InitialText="Initialisiere...")
     [xml]$xaml = @"
@@ -148,7 +148,7 @@ function Show-SplashScreen {
                 <TextBlock Text="📄" FontSize="38" Margin="0,0,12,0"/>
                 <TextBlock Text="Word-Format-Toolkit" FontSize="24" FontWeight="Bold" Foreground="#0078D4" VerticalAlignment="Center"/>
             </StackPanel>
-            <TextBlock Grid.Row="1" Text="🔍 Suche nach Word-Vorlagen..." FontSize="14" FontWeight="Bold" Foreground="#333333" HorizontalAlignment="Center" Margin="0,5,0,10"/>
+            <TextBlock Grid.Row="1" x:Name="SplashTitle" Text="🔍 Suche nach Word-Vorlagen..." FontSize="14" FontWeight="Bold" Foreground="#333333" HorizontalAlignment="Center" Margin="0,5,0,10"/>
             <ProgressBar Grid.Row="2" Height="8" IsIndeterminate="True" Foreground="#0078D4" VerticalAlignment="Center"/>
             <TextBlock Grid.Row="3" x:Name="StatusText" Text="$InitialText" FontSize="11" Foreground="Gray" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" Margin="0,12,0,0"/>
         </Grid>
@@ -158,17 +158,21 @@ function Show-SplashScreen {
     $reader = New-Object System.Xml.XmlNodeReader $xaml
     $window = [Windows.Markup.XamlReader]::Load($reader)
     $Global:Splash.Window = $window
+    $Global:Splash.Title = $window.FindName("SplashTitle")
     $Global:Splash.StatusText = $window.FindName("StatusText")
     $window.Show()
     $window.Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Render)
     [System.Windows.Forms.Application]::DoEvents()
 }
 function Update-SplashScreen {
-    param([string]$Text)
+    param([string]$Text, [string]$Title)
     if ($null -ne $Global:Splash.Window) {
         try {
-            $Global:Splash.Window.Dispatcher.Invoke([Action]{ $Global:Splash.StatusText.Text = $Text }, [System.Windows.Threading.DispatcherPriority]::Render)
-            [System.Windows.Forms.Application]::DoEvents()
+            $Global:Splash.Window.Dispatcher.Invoke([Action]{
+                if (-not [string]::IsNullOrWhiteSpace($Title)) { $Global:Splash.Title.Text = $Title }
+                $Global:Splash.StatusText.Text = $Text
+            }, [System.Windows.Threading.DispatcherPriority]::Render)
+            Do-WpfEvents
         } catch { }
     }
 }
@@ -308,15 +312,19 @@ function Get-TemplateStyles {
 function Do-WpfEvents {
     <#
     .SYNOPSIS
-        Pumpt die WPF-Dispatcher-Queue, damit UI-Elemente (z.B. Splash-ProgressBar)
-        sich animieren können, während synchroner Operationen.
+        Pumpt die WPF-Dispatcher-Queue für ~30ms, damit UI-Elemente (z.B.
+        Splash-ProgressBar) sich animieren können, während synchroner Operationen.
+    .DESCRIPTION
+        Der DispatcherTimer sorgt dafür, dass die PushFrame-Schleife lange genug
+        läuft, damit WPF-Render- und Animations-Ereignisse verarbeitet werden.
     #>
     $frame = New-Object System.Windows.Threading.DispatcherFrame
-    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvoke(
-        [Action]{ $frame.Continue = $false },
-        [System.Windows.Threading.DispatcherPriority]::Background
-    )
+    $timer = New-Object System.Windows.Threading.DispatcherTimer
+    $timer.Interval = [TimeSpan]::FromMilliseconds(30)
+    $timer.Add_Tick({ $frame.Continue = $false; $timer.Stop() })
+    $timer.Start()
     [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+    [System.Windows.Forms.Application]::DoEvents()
 }
 
 function Find-WordTemplates {
@@ -347,10 +355,9 @@ function Find-WordTemplates {
     foreach ($dir in $uniqueDirs) {
         try {
             if (Test-Path $dir) {
-                Update-SplashScreen -Text "Durchsuche: $dir"
-                Do-WpfEvents
+                Update-SplashScreen -Title "🔍 Suche nach Word-Vorlagen..." -Text "Durchsuche: $dir"
 
-                Get-ChildItem -Path "$dir\*" -Include "*.dotx","*.dotm" -File -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+                Get-ChildItem -Path $dir -Include "*.dot","*.dotx","*.dotm" -File -Recurse -Depth 2 -ErrorAction SilentlyContinue |
                     Where-Object {
                         $_.Name -notlike "~*" -and
                         $_.Name -notlike "Normal.dot*" -and
@@ -620,6 +627,150 @@ function Remove-DuplicateHeadingNumbers {
     }
     Write-Log "Doppelte Kapitelnummern entfernt: $removed" -Level SUCCESS
     return $removed
+}
+
+# ============================================================================
+# STANDARD-STYLE AUS VORLAGE ÜBERNEHMEN (SEITE 1 GESCHÜTZT)
+# ============================================================================
+function Update-StandardStyle {
+    <#
+    .SYNOPSIS
+        Kopiert die Formatvorlage "Standard" aus der Vorlage in das Dokument,
+        schützt aber die erste Seite (Titelseite) vor Änderungen.
+    .PARAMETER Document
+        Das Word-Dokument-COM-Objekt.
+    #>
+    param($Document)
+
+    Write-Log "Übernehme 'Standard'-Style aus Vorlage..." -Level INFO
+
+    if ([string]::IsNullOrWhiteSpace($Global:Config.TemplatePath) -or -not (Test-Path $Global:Config.TemplatePath)) {
+        Write-Log "Keine Vorlage gefunden - überspringe." -Level WARN
+        return $false
+    }
+
+    $templateDoc = $null
+    $word = $Document.Application
+
+    try {
+        # Schritt 1: Formatierung der "Standard"-Absätze auf Seite 1 sichern
+        Write-Log "Sichere Formatierung auf Seite 1..." -Level STEP
+        $savedFormats = New-Object System.Collections.ArrayList
+
+        # Bereich von Seite 1 ermitteln (Seitenanfang bis zu Seite 2)
+        $page2Start = 0
+        try {
+            $gotoRange = $document.GoTo(1, 1, 2)  # wdGoToPage=1, wdGoToAbsolute=1, Count=2
+            $page2Start = $gotoRange.Start
+        } catch {
+            # Dokument hat nur 1 Seite – dann alles schützen
+            Write-Log "Dokument hat nur eine Seite – schütze gesamten Inhalt." -Level STEP
+            $page2Start = $document.Content.End
+        }
+
+        if ($page2Start -gt $document.Content.Start) {
+            $firstPageRange = $document.Range(0, $page2Start)
+            foreach ($para in $firstPageRange.Paragraphs) {
+                try {
+                    $styleName = $para.Range.Style.NameLocal
+                } catch { $styleName = "" }
+                if ($styleName -eq "Standard") {
+                    [void]$savedFormats.Add([PSCustomObject]@{
+                        Start     = $para.Range.Start
+                        End       = $para.Range.End
+                        FontName  = $para.Range.Font.Name
+                        FontSize  = $para.Range.Font.Size
+                        Bold      = $para.Range.Font.Bold
+                        Italic    = $para.Range.Font.Italic
+                        Color     = $para.Range.Font.Color
+                        SpacingBefore = $para.ParagraphFormat.SpaceBefore
+                        SpacingAfter  = $para.ParagraphFormat.SpaceAfter
+                        LineSpacing   = $para.ParagraphFormat.LineSpacing
+                        Alignment     = $para.ParagraphFormat.Alignment
+                    })
+                }
+            }
+            Write-Log "$($savedFormats.Count) Absatz-Formatierungen auf Seite 1 gesichert." -Level STEP
+        }
+
+        # Schritt 2: Standard-Style aus Vorlage in Dokument kopieren
+        Write-Log "Öffne Vorlage und lese 'Standard'-Style..." -Level STEP
+        $templateDoc = $word.Documents.Open($Global:Config.TemplatePath, $false, $true)
+        $templateDoc.Saved = $true
+
+        $templateStyle = $templateDoc.Styles.Item("Standard")
+        $docStyle = $Document.Styles.Item("Standard")
+
+        # Schriftart-Eigenschaften kopieren
+        Write-Log "Kopiere Schrift-Formatierung..." -Level STEP
+        try { $docStyle.Font.Name = $templateStyle.Font.Name } catch { }
+        try { $docStyle.Font.Size = $templateStyle.Font.Size } catch { }
+        try { $docStyle.Font.Bold = $templateStyle.Font.Bold } catch { }
+        try { $docStyle.Font.Italic = $templateStyle.Font.Italic } catch { }
+        try { $docStyle.Font.Color = $templateStyle.Font.Color } catch { }
+        try { $docStyle.Font.Underline = $templateStyle.Font.Underline } catch { }
+        try { $docStyle.Font.Strikethrough = $templateStyle.Font.Strikethrough } catch { }
+        try { $docStyle.Font.Superscript = $templateStyle.Font.Superscript } catch { }
+        try { $docStyle.Font.Subscript = $templateStyle.Font.Subscript } catch { }
+        try { $docStyle.Font.Spacing = $templateStyle.Font.Spacing } catch { }
+        try { $docStyle.Font.Scaling = $templateStyle.Font.Scaling } catch { }
+
+        # Absatz-Eigenschaften kopieren
+        Write-Log "Kopiere Absatz-Formatierung..." -Level STEP
+        try { $docStyle.ParagraphFormat.Alignment = $templateStyle.ParagraphFormat.Alignment } catch { }
+        try { $docStyle.ParagraphFormat.SpaceBefore = $templateStyle.ParagraphFormat.SpaceBefore } catch { }
+        try { $docStyle.ParagraphFormat.SpaceAfter = $templateStyle.ParagraphFormat.SpaceAfter } catch { }
+        try { $docStyle.ParagraphFormat.LineSpacing = $templateStyle.ParagraphFormat.LineSpacing } catch { }
+        try { $docStyle.ParagraphFormat.LineSpacingRule = $templateStyle.ParagraphFormat.LineSpacingRule } catch { }
+        try { $docStyle.ParagraphFormat.FirstLineIndent = $templateStyle.ParagraphFormat.FirstLineIndent } catch { }
+        try { $docStyle.ParagraphFormat.LeftIndent = $templateStyle.ParagraphFormat.LeftIndent } catch { }
+        try { $docStyle.ParagraphFormat.RightIndent = $templateStyle.ParagraphFormat.RightIndent } catch { }
+        try { $docStyle.ParagraphFormat.SpaceBeforeAuto = $templateStyle.ParagraphFormat.SpaceBeforeAuto } catch { }
+        try { $docStyle.ParagraphFormat.SpaceAfterAuto = $templateStyle.ParagraphFormat.SpaceAfterAuto } catch { }
+        try { $docStyle.ParagraphFormat.WidowControl = $templateStyle.ParagraphFormat.WidowControl } catch { }
+        try { $docStyle.ParagraphFormat.KeepWithNext = $templateStyle.ParagraphFormat.KeepWithNext } catch { }
+        try { $docStyle.ParagraphFormat.KeepTogether = $templateStyle.ParagraphFormat.KeepTogether } catch { }
+        try { $docStyle.ParagraphFormat.PageBreakBefore = $templateStyle.ParagraphFormat.PageBreakBefore } catch { }
+
+        # Sprache
+        try { $docStyle.Font.NameAscii = $templateStyle.Font.NameAscii } catch { }
+        try { $docStyle.Font.NameFarEast = $templateStyle.Font.NameFarEast } catch { }
+
+        Write-Log "Style-Formatierung aus Vorlage übernommen." -Level SUCCESS
+
+        # Schritt 3: Formatierung auf Seite 1 wiederherstellen
+        if ($savedFormats.Count -gt 0) {
+            Write-Log "Stelle Formatierung auf Seite 1 wieder her..." -Level STEP
+            $savedFormatsArray = @($savedFormats)
+            foreach ($saved in $savedFormatsArray) {
+                try {
+                    $paraRange = $document.Range($saved.Start, $saved.End)
+                    if ($null -ne $saved.FontName) { $paraRange.Font.Name = $saved.FontName }
+                    if ($null -ne $saved.FontSize) { $paraRange.Font.Size = $saved.FontSize }
+                    if ($null -ne $saved.Bold) { $paraRange.Font.Bold = $saved.Bold }
+                    if ($null -ne $saved.Italic) { $paraRange.Font.Italic = $saved.Italic }
+                    if ($null -ne $saved.Color) { $paraRange.Font.Color = $saved.Color }
+                    if ($null -ne $saved.SpacingBefore) { $paraRange.ParagraphFormat.SpaceBefore = $saved.SpacingBefore }
+                    if ($null -ne $saved.SpacingAfter) { $paraRange.ParagraphFormat.SpaceAfter = $saved.SpacingAfter }
+                    if ($null -ne $saved.LineSpacing) { $paraRange.ParagraphFormat.LineSpacing = $saved.LineSpacing }
+                    if ($null -ne $saved.Alignment) { $paraRange.ParagraphFormat.Alignment = $saved.Alignment }
+                } catch { }
+            }
+            Write-Log "Formatierung auf Seite 1 wiederhergestellt." -Level SUCCESS
+        }
+
+        Write-Log "'Standard'-Style erfolgreich aus Vorlage übernommen (Seite 1 geschützt)." -Level SUCCESS
+        return $true
+    }
+    catch {
+        Write-Log "Fehler beim Übernehmen des Standard-Styles: $($_.Exception.Message)" -Level ERROR
+        return $false
+    }
+    finally {
+        try { if ($null -ne $templateDoc) { $templateDoc.Close(0) | Out-Null } } catch { }
+        try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($templateDoc) | Out-Null } catch { }
+        [GC]::Collect(); [GC]::WaitForPendingFinalizers()
+    }
 }
 
 # ============================================================================
@@ -1098,7 +1249,7 @@ function Invoke-ProcessDocument {
         Success=$false; Error=""; BackupPath=""
         StatsBefore=$null; StatsAfter=$null
         Headings=0; Levels=0; Duplicates=0; Tables=0; TOC=0
-        TableCaptions=0; FigureCaptions=0
+        TableCaptions=0; FigureCaptions=0; StandardStyle=$false
         DeadLinks=0; ManualNum=0; DeadLinkList=@(); ManualNumList=@(); Duration=$null
     }
     $word=$null; $document=$null; $savedOptions=@{}; $startTime=Get-Date
@@ -1110,23 +1261,32 @@ function Invoke-ProcessDocument {
         Copy-Item -Path $DocPath -Destination $backup -Force
         $result.BackupPath=$backup
         Write-Log "Backup erstellt: $([System.IO.Path]::GetFileName($backup))" -Level SUCCESS
+        [System.Windows.Forms.Application]::DoEvents()
         Write-Log "Starte Word im Hintergrund..." -Level STEP
         $word=New-Object -ComObject Word.Application; $word.Visible=$false; $word.DisplayAlerts=0
+        [System.Windows.Forms.Application]::DoEvents()
         Write-Log "Öffne Dokument..." -Level STEP
         $document=$word.Documents.Open($DocPath)
         if ($null -eq $document) { throw "Dokument konnte nicht geöffnet werden: $DocPath" }
         Enable-WordTurboMode -WordApp $word -Doc $document -SavedOptions ([ref]$savedOptions)
+        [System.Windows.Forms.Application]::DoEvents()
         Write-Log "Analysiere Dokument (vorher)..." -Level STEP
         $result.StatsBefore=Get-DocumentStats -Document $document
         Write-Log ("Vorher: Headings={0}, Levelsprünge={1}, Duplikate={2}, Manuell={3}, Tabellen={4}" -f $result.StatsBefore.Headings,$result.StatsBefore.LevelJumps,$result.StatsBefore.DuplicateNum,$result.StatsBefore.ManualNum,$result.StatsBefore.Tables) -Level INFO
+        [System.Windows.Forms.Application]::DoEvents()
         if ($Actions.Headings)   { $result.Headings   = Repair-Headings -Document $document }
         if ($Actions.Levels)     { $result.Levels     = Repair-HeadingLevels -Document $document }
         if ($Actions.Duplicates) { $result.Duplicates = Remove-DuplicateHeadingNumbers -Document $document }
         if ($Actions.ManualNum)  { $mn = Test-ManualNumbering -Document $document; $result.ManualNum = $mn.Count; $result.ManualNumList = @($mn) }
         if ($Actions.DeadLinks)  { $dl = Test-DeadLinks -Document $document; $result.DeadLinks = $dl.Count; $result.DeadLinkList = @($dl) }
+        [System.Windows.Forms.Application]::DoEvents()
+        if ($Actions.StandardStyle) { $result.StandardStyle = Update-StandardStyle -Document $document }
+        [System.Windows.Forms.Application]::DoEvents()
         if ($Actions.Tables)     { $result.Tables     = Format-Tables -Document $document }
+        [System.Windows.Forms.Application]::DoEvents()
         if ($Actions.TableCaptions)  { $result.TableCaptions  = Add-TableCaptions -Document $document }
         if ($Actions.FigureCaptions) { $result.FigureCaptions = Add-FigureCaptions -Document $document }
+        [System.Windows.Forms.Application]::DoEvents()
         # Tabellen-/Abbildungsverzeichnisse (mit | Select-Object -Last 1 gegen COM-Array-Probleme)
         $tocCount = 0
         if ($Actions.TableCaptions -or $Actions.FigureCaptions) {
@@ -1136,10 +1296,12 @@ function Invoke-ProcessDocument {
             $tocCount = $tocCount + [int](Update-DocumentTOC -Document $document | Select-Object -Last 1)
         }
         $result.TOC = $tocCount
+        [System.Windows.Forms.Application]::DoEvents()
         Write-Log "Analysiere Dokument (nachher)..." -Level STEP
         $result.StatsAfter=Get-DocumentStats -Document $document
         Write-Log "Speichere Dokument..." -Level STEP
         $document.Save()
+        [System.Windows.Forms.Application]::DoEvents()
         $result.Success=$true
         Write-Log "Fertig: $($result.FileName)" -Level SUCCESS
     }
@@ -1183,13 +1345,15 @@ function New-ComparisonReport {
             <td class='num'><span class='$( if($b.DuplicateNum -gt 0){"warn-text"} )'>$($b.DuplicateNum)</span> &rarr; <span class='ok-text'>$($a.DuplicateNum)</span></td>
             <td class='num'><span class='$( if($r.ManualNum -gt 0){"warn-text"} )'>$($r.ManualNum)</span></td>
             <td class='num'><span class='$( if($r.DeadLinks -gt 0){"err-text"} )'>$($r.DeadLinks)</span></td>
-            <td class='num'>$($r.Tables)</td><td class='num'>$($r.TableCaptions)</td><td class='num'>$($r.FigureCaptions)</td><td class='num'>$($r.TOC)</td>
+            <td class='num'>$($r.Tables)</td><td class='num'>$($r.TableCaptions)</td><td class='num'>$($r.FigureCaptions)</td>
+            <td class='num'><span class='$( if($r.StandardStyle){"ok-text"}else{"muted-text"} )'>$(if($r.StandardStyle){"✅"}else{"–"})</span></td>
+            <td class='num'>$($r.TOC)</td>
             <td>$("{0:hh\:mm\:ss}" -f $r.Duration)</td>
         </tr>
 "@
         } else {
             $rows += @"
-        <tr><td>$($r.FileName)</td><td>$badge</td><td colspan='11' class='err-text'>$($r.Error)</td><td>$("{0:hh\:mm\:ss}" -f $r.Duration)</td></tr>
+        <tr><td>$($r.FileName)</td><td>$badge</td><td colspan='12' class='err-text'>$($r.Error)</td><td>$("{0:hh\:mm\:ss}" -f $r.Duration)</td></tr>
 "@
         }
     }
@@ -1209,7 +1373,7 @@ tr:hover{background:#f0f8ff}
 .num{text-align:center}
 .badge{padding:3px 10px;border-radius:12px;color:white;font-size:11px;font-weight:bold}
 .badge.ok{background:#107C10}.badge.err{background:#D13438}
-.ok-text{color:#107C10;font-weight:bold}.warn-text{color:#CA5010;font-weight:bold}.err-text{color:#D13438;font-weight:bold}
+.ok-text{color:#107C10;font-weight:bold}.warn-text{color:#CA5010;font-weight:bold}.err-text{color:#D13438;font-weight:bold}.muted-text{color:#999}
 .footer{margin-top:20px;color:#888;font-size:12px}
 </style></head><body>
 <h1>📊 Word-Format-Vergleichsbericht</h1>
@@ -1224,7 +1388,7 @@ tr:hover{background:#f0f8ff}
 <th>Datei</th><th>Status</th><th>Überschr.</th><th>Tabellen</th>
 <th>Levelsprünge<br>(vor&rarr;nach)</th><th>Duplikate<br>(vor&rarr;nach)</th>
 <th>Manuell<br>nummeriert</th><th>Tote<br>Links</th>
-<th>Tab.<br>format.</th><th>Tab.<br>Beschr.</th><th>Abb.<br>Beschr.</th><th>TOC</th><th>Dauer</th>
+<th>Tab.<br>format.</th><th>Tab.<br>Beschr.</th><th>Abb.<br>Beschr.</th><th>Standard<br>Style</th><th>TOC</th><th>Dauer</th>
 </tr></thead><tbody>
 $rows
 </tbody></table>
@@ -1550,6 +1714,7 @@ function Show-MainGUI {
                     <CheckBox x:Name="chkTOC"        Content="📑 Inhaltsverzeichnis updaten" IsChecked="True" Margin="0,3"/>
                     <CheckBox x:Name="chkTableCaptions" Content="🏷️ Tabellenbeschriftung" IsChecked="True" Margin="0,3"/>
                     <CheckBox x:Name="chkFigureCaptions" Content="🖼️ Abbildungsbeschriftung" IsChecked="True" Margin="0,3"/>
+                    <CheckBox x:Name="chkStandardStyle" Content="📄 Standard aus Vorlage übernehmen" Margin="0,3"/>
                     <Separator Margin="0,6"/>
                     <CheckBox x:Name="chkReport"     Content="📈 Vergleichsbericht" IsChecked="True" Margin="0,3"/>
                     <CheckBox x:Name="chkVerbose"    Content="🔍 Detaillierte Schritte" IsChecked="True" Margin="0,3"/>
@@ -1590,6 +1755,7 @@ function Show-MainGUI {
         chkDeadLinks=$window.FindName("chkDeadLinks"); chkTables=$window.FindName("chkTables")
         chkTOC=$window.FindName("chkTOC"); chkReport=$window.FindName("chkReport"); chkVerbose=$window.FindName("chkVerbose")
         chkTableCaptions=$window.FindName("chkTableCaptions"); chkFigureCaptions=$window.FindName("chkFigureCaptions")
+        chkStandardStyle=$window.FindName("chkStandardStyle")
         txtCleanLogs=$window.FindName("txtCleanLogs"); txtCleanReports=$window.FindName("txtCleanReports"); txtCleanBackups=$window.FindName("txtCleanBackups")
         btnStart=$window.FindName("btnStart"); btnReport=$window.FindName("btnReport"); btnCancel=$window.FindName("btnCancel")
         imgStylePreview=$window.FindName("imgStylePreview")
@@ -1603,9 +1769,11 @@ function Show-MainGUI {
     $Global:LastReportPath=$null
 
     $fillTemplates={
+        Update-SplashScreen -Title "🔍 Suche nach Word-Vorlagen..." -Text "Durchsuche Vorlagenordner..."
         $Global:UI.cmbTemplate.Items.Clear()
         $Global:UI.ProgressText.Text = "Suche Vorlagen..."
         $templates = Find-WordTemplates
+        Update-SplashScreen -Text "$($templates.Count) Vorlagen gefunden."
         $Global:UI.ProgressText.Text = "$($templates.Count) Vorlagen gefunden."
         [System.Windows.Forms.Application]::DoEvents()
         foreach ($t in $templates) {
@@ -1645,6 +1813,7 @@ function Show-MainGUI {
     }
 
     $loadTemplateStyles = {
+        Update-SplashScreen -Title "📋 Lade Tabellen-Styles..." -Text "Analysiere gewählte Vorlage..."
         # Cache leeren, da neue Styles geladen werden
         $Global:StylePreviewCache.Clear()
         $Global:LastPreviewedStyle = $null   # Vorschau erneut erzwingen
@@ -1657,11 +1826,14 @@ function Show-MainGUI {
         $tplPath = & $getSelectedTemplate
         if ([string]::IsNullOrWhiteSpace($tplPath) -or -not (Test-Path $tplPath)) {
             $Global:UI.cmbTableStyle.Items.Clear()
+            Update-SplashScreen -Title "✅ Bereit" -Text "Keine Vorlage ausgewählt."
             return
         }
-        $Global:UI.ProgressText.Text = "Lade Styles aus $([System.IO.Path]::GetFileName($tplPath))..."
+        $tplName = [System.IO.Path]::GetFileName($tplPath)
+        Update-SplashScreen -Text "Lese Styles aus $tplName ..."
+        $Global:UI.ProgressText.Text = "Lade Styles aus $tplName ..."
         [System.Windows.Forms.Application]::DoEvents()
-        Write-Log "Lade Styles aus: $([System.IO.Path]::GetFileName($tplPath))" -Level STEP
+        Write-Log "Lade Styles aus: $tplName" -Level STEP
         try {
             $styles = Get-TemplateStyles -TemplatePath $tplPath
         } catch {
@@ -1683,6 +1855,7 @@ function Show-MainGUI {
         elseif ($Global:UI.cmbTableStyle.Items.Count -gt 0) { $Global:UI.cmbTableStyle.SelectedIndex = 0 }
         else { $Global:UI.cmbTableStyle.Text = $Global:Config.TableStyleName }
 
+        Update-SplashScreen -Title "✅ Bereit" -Text "$($Global:UI.cmbTableStyle.Items.Count) Tabellen-Styles geladen."
         $Global:UI.ProgressText.Text = "$($Global:UI.cmbTableStyle.Items.Count) Tabellen-Styles geladen."
         [System.Windows.Forms.Application]::DoEvents()
     }
@@ -1780,7 +1953,7 @@ function Show-MainGUI {
         $logD=[int]($Global:UI.txtCleanLogs.Text); $repD=[int]($Global:UI.txtCleanReports.Text); $bakD=[int]($Global:UI.txtCleanBackups.Text)
         $dirs=@($Global:UI.FileList.Items | ForEach-Object { [System.IO.Path]::GetDirectoryName($_) } | Select-Object -Unique)
         $n=Invoke-Cleanup -LogDays $logD -ReportDays $repD -BackupDays $bakD -BackupSearchDirs $dirs
-        [System.Windows.MessageBox]::Show("$n Datei(en) gelöscht.","Aufräumen","OK","Information") | Out-Null
+        [System.Windows.MessageBox]::Show($window, "$n Datei(en) gelöscht.", "Aufräumen", "OK", "Information") | Out-Null
     })
     $Global:UI.btnReport.Add_Click({ if ($Global:LastReportPath -and (Test-Path $Global:LastReportPath)) { Start-Process $Global:LastReportPath } })
     $Global:UI.btnCancel.Add_Click({ $Global:Sync.CancelRequested=$true; $Global:UI.btnCancel.IsEnabled=$false; Write-Log "Abbruch angefordert - stoppe nach aktuellem Dokument..." -Level WARN })
@@ -1792,7 +1965,7 @@ function Show-MainGUI {
         # ----- START (direkte Verarbeitung im GUI-Thread mit DoEvents) -----
     $Global:UI.btnStart.Add_Click({
         $files=@($Global:UI.FileList.Items)
-        if ($files.Count -eq 0) { [System.Windows.MessageBox]::Show("Bitte zuerst Dokumente hinzufügen!","Hinweis","OK","Warning")|Out-Null; return }
+        if ($files.Count -eq 0) { [System.Windows.MessageBox]::Show($window, "Bitte zuerst Dokumente hinzufügen!", "Hinweis", "OK", "Warning")|Out-Null; return }
         $Global:Config.TemplatePath=& $getSelectedTemplate
         $Global:Config.TableStyleName = $Global:UI.cmbTableStyle.Text
         $Global:Config.VerboseSteps=$Global:UI.chkVerbose.IsChecked
@@ -1801,9 +1974,10 @@ function Show-MainGUI {
             Duplicates=$Global:UI.chkDuplicates.IsChecked; ManualNum=$Global:UI.chkManualNum.IsChecked
             DeadLinks=$Global:UI.chkDeadLinks.IsChecked; Tables=$Global:UI.chkTables.IsChecked; TOC=$Global:UI.chkTOC.IsChecked
             TableCaptions=$Global:UI.chkTableCaptions.IsChecked; FigureCaptions=$Global:UI.chkFigureCaptions.IsChecked
+            StandardStyle=$Global:UI.chkStandardStyle.IsChecked
         }
-        if (-not ($actions.Values -contains $true)) { [System.Windows.MessageBox]::Show("Bitte mindestens eine Aktion wählen!","Hinweis","OK","Warning")|Out-Null; return }
-        if ($actions.Tables -and (-not (Test-Path $Global:Config.TemplatePath))) { [System.Windows.MessageBox]::Show("Vorlage nicht gefunden!","Vorlage fehlt","OK","Warning")|Out-Null; return }
+        if (-not ($actions.Values -contains $true)) { [System.Windows.MessageBox]::Show($window, "Bitte mindestens eine Aktion wählen!", "Hinweis", "OK", "Warning")|Out-Null; return }
+        if ($actions.Tables -and (-not (Test-Path $Global:Config.TemplatePath))) { [System.Windows.MessageBox]::Show($window, "Vorlage nicht gefunden!", "Vorlage fehlt", "OK", "Warning")|Out-Null; return }
 
         # Cancel-Flag zurücksetzen
         $Global:Sync.CancelRequested = $false
@@ -1861,10 +2035,22 @@ function Show-MainGUI {
 
         $cn=if($Global:Sync.CancelRequested){"`n(Abgebrochen durch Benutzer)"}else{""}
         $msg="Verarbeitung beendet!`n`nErfolgreich: $okCount`nFehler: $errCount$cn"
+        # MessageBox mit Owner = Hauptfenster, damit sie nicht verloren geht
         if ($Global:LastReportPath) {
             $msg+="`n`nVergleichsbericht erstellt. Jetzt öffnen?"
-            if ([System.Windows.MessageBox]::Show($msg,"Fertig","YesNo","Information") -eq "Yes") { Start-Process $Global:LastReportPath }
-        } else { [System.Windows.MessageBox]::Show($msg,"Fertig","OK","Information")|Out-Null }
+            if ([System.Windows.MessageBox]::Show($window, $msg, "Fertig", "YesNo", "Information") -eq "Yes") { Start-Process $Global:LastReportPath }
+        } else { [System.Windows.MessageBox]::Show($window, $msg, "Fertig", "OK", "Information")|Out-Null }
+
+        # Fenster nach MessageBox wieder in den Vordergrund holen
+        try {
+            $window.Dispatcher.Invoke([Action]{
+                $window.Activate()
+                $window.Topmost = $true
+            }, [System.Windows.Threading.DispatcherPriority]::Render)
+            Start-Sleep -Milliseconds 100
+            $window.Topmost = $false
+            [System.Windows.Forms.Application]::DoEvents()
+        } catch { }
     })
 
     # Word-Vorschau-Instanz sauber beenden, wenn GUI geschlossen wird
@@ -1877,7 +2063,6 @@ function Show-MainGUI {
     })
 
     Close-SplashScreen
-    $window.Topmost = $true
     $window.Activate()
     [System.Windows.Forms.Application]::DoEvents()
     $window.ShowDialog() | Out-Null
