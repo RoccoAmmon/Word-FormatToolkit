@@ -542,21 +542,21 @@ function Repair-Headings {
 function Repair-MissingHeadings {
     <#
     .SYNOPSIS
-        Findet "Standard"-Absätze, die wie Überschriften aussehen
-        (Nummerierung + OutlineLevel), und weist ihnen den passenden
-        Heading-Style zu.
+        Findet "Standard"-Absätze mit Kapitelnummerierung und weist
+        den passenden Überschrift-Style zu.
     .DESCRIPTION
         Manche Dokumente haben Absätze mit manueller Kapitelnummer
-        (z.B. "4.8.3 Einleitung") und korrektem OutlineLevel, aber die
-        Formatvorlage steht fälschlich auf "Standard" statt "Überschrift 3".
-        Diese Funktion erkennt solche Fälle und korrigiert sie.
+        (z.B. "4.8.3 Einleitung"), aber die Formatvorlage steht fälschlich
+        auf "Standard" statt "Überschrift 3". Diese Funktion erkennt
+        solche Fälle anhand des Nummerierungsmusters und korrigiert sie.
     .PARAMETER Document
         Das Word-Dokument-COM-Objekt.
     #>
     param($Document)
-    Write-Log "Suche nach 'Standard'-Absätzen mit Überschrift-Charakter..." -Level INFO
+    Write-Log "Suche nach 'Standard'-Absätzen mit Kapitelnummer..." -Level INFO
 
     $fixed = 0
+    # Muster: Ziffern mit optionalen Punkten, dann Leerraum, dann Text
     $rx = '^(\d+(?:\.\d+)*\.?)[\s\t\u00A0]+(.+)$'
 
     try {
@@ -570,21 +570,15 @@ function Repair-MissingHeadings {
                 # Nur "Standard"-Style interessiert
                 if ($styleName -ne "Standard") { continue }
 
-                # OutlineLevel prüfen (1-9 = Überschriftsebene)
-                $outlineLevel = $para.OutlineLevel
-                $hasOutline = ($null -ne $outlineLevel -and [int]$outlineLevel -ge 1 -and [int]$outlineLevel -le 9)
-                if (-not $hasOutline) { continue }
-
                 $text = $range.Text -replace '\r|\n', ''
                 if ([string]::IsNullOrWhiteSpace($text)) { continue }
 
                 # Auf Nummerierungsmuster prüfen
                 if ($text -notmatch $rx) { continue }
 
-                # Tiefe ermitteln (4.8.3 = 3 Ebenen = Überschrift 3)
+                # Tiefe ermitteln (1 = Überschrift 1, 1.1 = Überschrift 2, 1.1.0 = Überschrift 3)
                 $numStr = $matches[1] -replace '\.$', ''
-                $numParts = $numStr -split '\.'
-                $depth = $numParts.Count
+                $depth = ($numStr -split '\.').Count
                 if ($depth -gt 9) { $depth = 9 }
 
                 $newStyleName = "Überschrift $depth"
