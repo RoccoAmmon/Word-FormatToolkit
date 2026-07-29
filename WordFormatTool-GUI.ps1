@@ -7,7 +7,6 @@
     von Word-Dokumenten (.docx/.doc). Es repariert Überschriften, korrigiert
     Levelsprünge, entfernt doppelte Kapitelnummern, formatiert Tabellen nach
     Vorlagen-Styles, übernimmt die Formatvorlage „Standard" aus der Vorlage,
-    übernimmt Kopf- und Fußzeilen aus der Vorlage,
     fügt Tabellen-/Abbildungsbeschriftungen mit SEQ-Feldfunktionen
     ein, erstellt Tabellen- und Abbildungsverzeichnisse, aktualisiert
     Inhaltsverzeichnisse, prüft auf tote Links und erkennt manuelle Nummerierungen
@@ -29,7 +28,6 @@
     - Manuelle Nummerierung erkennen
     - Visuelle Tabellen-Style-Vorschau (Win32-Clipboard + EMF-Export)
     - Standard-Style aus Vorlage übernehmen (erste Seite geschützt)
-    - Kopf-/Fußzeilen aus Vorlage übernehmen
     - HTML-Vergleichsbericht (Vorher/Nachher)
     - Automatische Vorlagen-Suche in Registry + bekannten Pfaden
     - Aufräum-Routine für Logs, Reports und Backups
@@ -44,7 +42,7 @@
 
 .NOTES
     Autor   : Rocco Ammon
-    Geändert: 2026-07-30
+    Geändert: 2026-07-29
     Version : 1.4.0
     Lizenz  : MIT
     Aufruf  : .\WordFormatTool-GUI.ps1
@@ -539,6 +537,89 @@ function Repair-Headings {
 }
 
 # ============================================================================
+# STANDARD-ABSÄTZE MIT ÜBERSCHRIFT-CHARAKTER ERKENNEN
+# ============================================================================
+function Repair-MissingHeadings {
+    <#
+    .SYNOPSIS
+        Findet "Standard"-Absätze, die wie Überschriften aussehen
+        (Nummerierung + OutlineLevel), und weist ihnen den passenden
+        Heading-Style zu.
+    .DESCRIPTION
+        Manche Dokumente haben Absätze mit manueller Kapitelnummer
+        (z.B. "4.8.3 Einleitung") und korrektem OutlineLevel, aber die
+        Formatvorlage steht fälschlich auf "Standard" statt "Überschrift 3".
+        Diese Funktion erkennt solche Fälle und korrigiert sie.
+    .PARAMETER Document
+        Das Word-Dokument-COM-Objekt.
+    #>
+    param($Document)
+    Write-Log "Suche nach 'Standard'-Absätzen mit Überschrift-Charakter..." -Level INFO
+
+    $fixed = 0
+    $rx = '^(\d+(?:\.\d+)*\.?)[\s\t\u00A0]+(.+)$'
+
+    try {
+        $paraCount = $Document.Paragraphs.Count
+        for ($i = 1; $i -le $paraCount; $i++) {
+            try {
+                $para = $Document.Paragraphs.Item($i)
+                $range = $para.Range
+                $styleName = $range.Style.NameLocal
+
+                # Nur "Standard"-Style interessiert
+                if ($styleName -ne "Standard") { continue }
+
+                # OutlineLevel prüfen (1-9 = Überschriftsebene)
+                $outlineLevel = $para.OutlineLevel
+                $hasOutline = ($null -ne $outlineLevel -and [int]$outlineLevel -ge 1 -and [int]$outlineLevel -le 9)
+                if (-not $hasOutline) { continue }
+
+                $text = $range.Text -replace '\r|\n', ''
+                if ([string]::IsNullOrWhiteSpace($text)) { continue }
+
+                # Auf Nummerierungsmuster prüfen
+                if ($text -notmatch $rx) { continue }
+
+                # Tiefe ermitteln (4.8.3 = 3 Ebenen = Überschrift 3)
+                $numStr = $matches[1] -replace '\.$', ''
+                $numParts = $numStr -split '\.'
+                $depth = $numParts.Count
+                if ($depth -gt 9) { $depth = 9 }
+
+                $newStyleName = "Überschrift $depth"
+                try { $newStyle = $Document.Styles.Item($newStyleName) } catch {
+                    try { $newStyle = $Document.Styles.Item("Heading $depth"); $newStyleName = "Heading $depth" } catch { continue }
+                }
+
+                $range.Style = $newStyle
+
+                # Manuelle Nummerierung entfernen
+                $pm = [regex]::Match($text, '^(\d+(?:\.\d+)*\.?)[\s\t\u00A0]+')
+                if ($pm.Success) {
+                    $endPos = $range.Start + $pm.Length
+                    if ($endPos -le $range.End) {
+                        ($Document.Range($range.Start, $endPos)).Text = ""
+                    }
+                }
+
+                $fixed++
+                if ($Global:Config.VerboseSteps) {
+                    $rest = ($text -replace $rx, '$2')
+                    if ($rest.Length -gt 45) { $rest = $rest.Substring(0, 45) + "..." }
+                    Write-Log "Korrigiert: Standard -> $newStyleName '$rest'" -Level STEP
+                }
+            } catch { }
+        }
+    } catch {
+        Write-Log "Fehler bei der Erkennung fehlender Überschriften: $($_.Exception.Message)" -Level ERROR
+    }
+
+    Write-Log "Fehlende Überschriften korrigiert: $fixed" -Level SUCCESS
+    return $fixed
+}
+
+# ============================================================================
 # LEVELSPRÜNGE KORRIGIEREN
 # ============================================================================
 function Repair-HeadingLevels {
@@ -768,104 +849,6 @@ function Update-StandardStyle {
     }
     catch {
         Write-Log "Fehler beim Übernehmen des Standard-Styles: $($_.Exception.Message)" -Level ERROR
-        return $false
-    }
-    finally {
-        try { if ($null -ne $templateDoc) { $templateDoc.Close(0) | Out-Null } } catch { }
-        try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($templateDoc) | Out-Null } catch { }
-        [GC]::Collect(); [GC]::WaitForPendingFinalizers()
-    }
-}
-
-# ============================================================================
-# KOPF-/FUSSZEILEN AUS VORLAGE ÜBERNEHMEN
-# ============================================================================
-function Update-HeaderFooter {
-    <#
-    .SYNOPSIS
-        Kopiert alle Kopf- und Fußzeilen aus der Vorlage in das Dokument.
-    .DESCRIPTION
-        Öffnet die Vorlage, liest für jeden Header/Footer-Typ (Primär, Erste Seite,
-        Gerade Seiten) den Inhalt aus dem ersten Abschnitt der Vorlage und
-        überschreibt damit alle Abschnitte des Zieldokuments.
-        Die Einstellungen "DifferentFirstPageHeaderFooter" und
-        "OddAndEvenPagesHeaderFooter" werden von der Vorlage übernommen.
-    .PARAMETER Document
-        Das Word-Dokument-COM-Objekt.
-    #>
-    param($Document)
-
-    Write-Log "Übernehme Kopf-/Fußzeilen aus Vorlage..." -Level INFO
-
-    if ([string]::IsNullOrWhiteSpace($Global:Config.TemplatePath) -or -not (Test-Path $Global:Config.TemplatePath)) {
-        Write-Log "Keine Vorlage gefunden - überspringe." -Level WARN
-        return $false
-    }
-
-    $templateDoc = $null
-    $word = $Document.Application
-
-    try {
-        Write-Log "Öffne Vorlage..." -Level STEP
-        $templateDoc = $word.Documents.Open($Global:Config.TemplatePath, $false, $true)
-        $templateDoc.Saved = $true
-
-        $srcSection = $templateDoc.Sections.Item(1)
-        $dstSectionsCount = $Document.Sections.Count
-
-        Write-Log "Vorlage hat 1 Abschnitt, Dokument hat $dstSectionsCount Abschnitt(e)." -Level STEP
-
-        # Header/Footer-Typen
-        $types = @(
-            @{Name="Header (Primär)";       Type=1; IsFooter=$false}
-            @{Name="Header (Erste Seite)";   Type=2; IsFooter=$false}
-            @{Name="Header (Gerade Seiten)"; Type=3; IsFooter=$false}
-            @{Name="Footer (Primär)";        Type=1; IsFooter=$true}
-            @{Name="Footer (Erste Seite)";   Type=2; IsFooter=$true}
-            @{Name="Footer (Gerade Seiten)"; Type=3; IsFooter=$true}
-        )
-
-        # Section-Einstellungen von der Vorlage übernehmen
-        try { $Document.PageSetup.DifferentFirstPageHeaderFooter = $templateDoc.PageSetup.DifferentFirstPageHeaderFooter } catch { }
-        try { $Document.PageSetup.OddAndEvenPagesHeaderFooter = $templateDoc.PageSetup.OddAndEvenPagesHeaderFooter } catch { }
-
-        foreach ($info in $types) {
-            $srcObj = if ($info.IsFooter) { $srcSection.Footers.Item($info.Type) } else { $srcSection.Headers.Item($info.Type) }
-
-            # Prüfen ob die Kopf-/Fußzeile Inhalt hat oder verknüpft ist
-            $hasContent = $false
-            try {
-                $srcRange = $srcObj.Range
-                if ($srcRange.Text -and $srcRange.Text.Length -gt 1) { $hasContent = $true }
-                if ($srcObj.Shapes.Count -gt 0) { $hasContent = $true }
-            } catch { }
-
-            if (-not $hasContent) { continue }
-
-            Write-Log "Kopiere $($info.Name)..." -Level STEP
-
-            # In jeden Abschnitt des Zieldokuments kopieren
-            for ($i = 1; $i -le $dstSectionsCount; $i++) {
-                try {
-                    $dstSection = $Document.Sections.Item($i)
-                    $dstObj = if ($info.IsFooter) { $dstSection.Footers.Item($info.Type) } else { $dstSection.Headers.Item($info.Type) }
-
-                    # Verknüpfung zum vorherigen Abschnitt lösen
-                    try { $dstObj.LinkToPrevious = $false } catch { }
-
-                    # FormattedText kopiert Inhalt inkl. Formatierung
-                    $dstObj.Range.FormattedText = $srcRange
-                } catch {
-                    Write-Log "Fehler bei $($info.Name) in Abschnitt ${i}: $($_.Exception.Message)" -Level WARN
-                }
-            }
-        }
-
-        Write-Log "Kopf-/Fußzeilen erfolgreich aus Vorlage übernommen." -Level SUCCESS
-        return $true
-    }
-    catch {
-        Write-Log "Fehler beim Übernehmen der Kopf-/Fußzeilen: $($_.Exception.Message)" -Level ERROR
         return $false
     }
     finally {
@@ -1351,7 +1334,7 @@ function Invoke-ProcessDocument {
         Success=$false; Error=""; BackupPath=""
         StatsBefore=$null; StatsAfter=$null
         Headings=0; Levels=0; Duplicates=0; Tables=0; TOC=0
-        TableCaptions=0; FigureCaptions=0; StandardStyle=$false; HeaderFooter=$false
+        TableCaptions=0; FigureCaptions=0; StandardStyle=$false
         DeadLinks=0; ManualNum=0; DeadLinkList=@(); ManualNumList=@(); Duration=$null
     }
     $word=$null; $document=$null; $savedOptions=@{}; $startTime=Get-Date
@@ -1376,15 +1359,13 @@ function Invoke-ProcessDocument {
         $result.StatsBefore=Get-DocumentStats -Document $document
         Write-Log ("Vorher: Headings={0}, Levelsprünge={1}, Duplikate={2}, Manuell={3}, Tabellen={4}" -f $result.StatsBefore.Headings,$result.StatsBefore.LevelJumps,$result.StatsBefore.DuplicateNum,$result.StatsBefore.ManualNum,$result.StatsBefore.Tables) -Level INFO
         [System.Windows.Forms.Application]::DoEvents()
-        if ($Actions.Headings)   { $result.Headings   = Repair-Headings -Document $document }
+        if ($Actions.Headings)   { $result.Headings   = Repair-Headings -Document $document; $result.Headings = $result.Headings + (Repair-MissingHeadings -Document $document) }
         if ($Actions.Levels)     { $result.Levels     = Repair-HeadingLevels -Document $document }
         if ($Actions.Duplicates) { $result.Duplicates = Remove-DuplicateHeadingNumbers -Document $document }
         if ($Actions.ManualNum)  { $mn = Test-ManualNumbering -Document $document; $result.ManualNum = $mn.Count; $result.ManualNumList = @($mn) }
         if ($Actions.DeadLinks)  { $dl = Test-DeadLinks -Document $document; $result.DeadLinks = $dl.Count; $result.DeadLinkList = @($dl) }
         [System.Windows.Forms.Application]::DoEvents()
         if ($Actions.StandardStyle) { $result.StandardStyle = Update-StandardStyle -Document $document }
-        [System.Windows.Forms.Application]::DoEvents()
-        if ($Actions.HeaderFooter) { $result.HeaderFooter = Update-HeaderFooter -Document $document }
         [System.Windows.Forms.Application]::DoEvents()
         if ($Actions.Tables)     { $result.Tables     = Format-Tables -Document $document }
         [System.Windows.Forms.Application]::DoEvents()
@@ -1451,14 +1432,13 @@ function New-ComparisonReport {
             <td class='num'><span class='$( if($r.DeadLinks -gt 0){"err-text"} )'>$($r.DeadLinks)</span></td>
             <td class='num'>$($r.Tables)</td><td class='num'>$($r.TableCaptions)</td><td class='num'>$($r.FigureCaptions)</td>
             <td class='num'><span class='$( if($r.StandardStyle){"ok-text"}else{"muted-text"} )'>$(if($r.StandardStyle){"✅"}else{"–"})</span></td>
-            <td class='num'><span class='$( if($r.HeaderFooter){"ok-text"}else{"muted-text"} )'>$(if($r.HeaderFooter){"✅"}else{"–"})</span></td>
             <td class='num'>$($r.TOC)</td>
             <td>$("{0:hh\:mm\:ss}" -f $r.Duration)</td>
         </tr>
 "@
         } else {
             $rows += @"
-        <tr><td>$($r.FileName)</td><td>$badge</td><td colspan='13' class='err-text'>$($r.Error)</td><td>$("{0:hh\:mm\:ss}" -f $r.Duration)</td></tr>
+        <tr><td>$($r.FileName)</td><td>$badge</td><td colspan='12' class='err-text'>$($r.Error)</td><td>$("{0:hh\:mm\:ss}" -f $r.Duration)</td></tr>
 "@
         }
     }
@@ -1493,7 +1473,7 @@ tr:hover{background:#f0f8ff}
 <th>Datei</th><th>Status</th><th>Überschr.</th><th>Tabellen</th>
 <th>Levelsprünge<br>(vor&rarr;nach)</th><th>Duplikate<br>(vor&rarr;nach)</th>
 <th>Manuell<br>nummeriert</th><th>Tote<br>Links</th>
-<th>Tab.<br>format.</th><th>Tab.<br>Beschr.</th><th>Abb.<br>Beschr.</th><th>Standard<br>Style</th><th>Kopf/<br>Fußz.</th><th>TOC</th><th>Dauer</th>
+<th>Tab.<br>format.</th><th>Tab.<br>Beschr.</th><th>Abb.<br>Beschr.</th><th>Standard<br>Style</th><th>TOC</th><th>Dauer</th>
 </tr></thead><tbody>
 $rows
 </tbody></table>
@@ -1820,7 +1800,6 @@ function Show-MainGUI {
                     <CheckBox x:Name="chkTableCaptions" Content="🏷️ Tabellenbeschriftung" IsChecked="True" Margin="0,3"/>
                     <CheckBox x:Name="chkFigureCaptions" Content="🖼️ Abbildungsbeschriftung" IsChecked="True" Margin="0,3"/>
                     <CheckBox x:Name="chkStandardStyle" Content="📄 Standard aus Vorlage übernehmen" Margin="0,3"/>
-                    <CheckBox x:Name="chkHeaderFooter" Content="📄 Kopf-/Fußzeilen aus Vorlage übernehmen" Margin="0,3"/>
                     <Separator Margin="0,6"/>
                     <CheckBox x:Name="chkReport"     Content="📈 Vergleichsbericht" IsChecked="True" Margin="0,3"/>
                     <CheckBox x:Name="chkVerbose"    Content="🔍 Detaillierte Schritte" IsChecked="True" Margin="0,3"/>
@@ -1862,7 +1841,6 @@ function Show-MainGUI {
         chkTOC=$window.FindName("chkTOC"); chkReport=$window.FindName("chkReport"); chkVerbose=$window.FindName("chkVerbose")
         chkTableCaptions=$window.FindName("chkTableCaptions"); chkFigureCaptions=$window.FindName("chkFigureCaptions")
         chkStandardStyle=$window.FindName("chkStandardStyle")
-        chkHeaderFooter=$window.FindName("chkHeaderFooter")
         txtCleanLogs=$window.FindName("txtCleanLogs"); txtCleanReports=$window.FindName("txtCleanReports"); txtCleanBackups=$window.FindName("txtCleanBackups")
         btnStart=$window.FindName("btnStart"); btnReport=$window.FindName("btnReport"); btnCancel=$window.FindName("btnCancel")
         imgStylePreview=$window.FindName("imgStylePreview")
@@ -2082,7 +2060,6 @@ function Show-MainGUI {
             DeadLinks=$Global:UI.chkDeadLinks.IsChecked; Tables=$Global:UI.chkTables.IsChecked; TOC=$Global:UI.chkTOC.IsChecked
             TableCaptions=$Global:UI.chkTableCaptions.IsChecked; FigureCaptions=$Global:UI.chkFigureCaptions.IsChecked
             StandardStyle=$Global:UI.chkStandardStyle.IsChecked
-            HeaderFooter=$Global:UI.chkHeaderFooter.IsChecked
         }
         if (-not ($actions.Values -contains $true)) { [System.Windows.MessageBox]::Show($window, "Bitte mindestens eine Aktion wählen!", "Hinweis", "OK", "Warning")|Out-Null; return }
         if ($actions.Tables -and (-not (Test-Path $Global:Config.TemplatePath))) { [System.Windows.MessageBox]::Show($window, "Vorlage nicht gefunden!", "Vorlage fehlt", "OK", "Warning")|Out-Null; return }
