@@ -6,7 +6,8 @@
     Ein leistungsstarkes PowerShell-WPF-Tool zur automatisierten Batch-Verarbeitung
     von Word-Dokumenten (.docx/.doc). Es repariert Überschriften, korrigiert
     Levelsprünge, entfernt doppelte Kapitelnummern, formatiert Tabellen nach
-    Vorlagen-Styles, fügt Tabellen-/Abbildungsbeschriftungen mit SEQ-Feldfunktionen
+    Vorlagen-Styles, übernimmt die Formatvorlage „Standard" aus der Vorlage,
+    fügt Tabellen-/Abbildungsbeschriftungen mit SEQ-Feldfunktionen
     ein, erstellt Tabellen- und Abbildungsverzeichnisse, aktualisiert
     Inhaltsverzeichnisse, prüft auf tote Links und erkennt manuelle Nummerierungen
     – alles mit Live-Log und Vergleichsbericht.
@@ -26,6 +27,7 @@
     - Link-Prüfer (tote Hyperlinks & Querverweise)
     - Manuelle Nummerierung erkennen
     - Visuelle Tabellen-Style-Vorschau (Win32-Clipboard + EMF-Export)
+    - Standard-Style aus Vorlage übernehmen (erste Seite geschützt)
     - HTML-Vergleichsbericht (Vorher/Nachher)
     - Automatische Vorlagen-Suche in Registry + bekannten Pfaden
     - Aufräum-Routine für Logs, Reports und Backups
@@ -40,7 +42,7 @@
 
 .NOTES
     Autor   : Rocco Ammon
-    Erstellt: 2026-06-10
+    Geändert: 2026-07-29
     Version : 1.4.0
     Lizenz  : MIT
     Aufruf  : .\WordFormatTool-GUI.ps1
