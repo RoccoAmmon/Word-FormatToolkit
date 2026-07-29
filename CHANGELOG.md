@@ -7,6 +7,17 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ---
 
+## [1.5.0] – 2026-07-30
+
+### Added
+- **Kopf-/Fußzeilen aus Vorlage übernehmen** – Alle Kopf- und Fußzeilen (Primär, Erste Seite, Gerade Seiten) werden aus der Vorlage in alle Abschnitte des Dokuments kopiert. Die Einstellungen "DifferentFirstPage" und "OddAndEvenPages" werden von der Vorlage übernommen.
+
+### Changed
+- **HTML-Report** – Neue Spalte "Kopf/Fußz." im Vergleichsbericht
+- **Script-Header** – Beschreibung um Kopf-/Fußzeilen-Feature erweitert
+
+---
+
 ## [1.4.0] – 2026-07-29
 
 ### Added
