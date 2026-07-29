@@ -682,19 +682,18 @@ function Update-StandardStyle {
 
     $templateDoc = $null
     $word = $Document.Application
+    $savePath = $Document.FullName
 
     try {
         # Schritt 1: Formatierung der "Standard"-Absätze auf Seite 1 sichern
         Write-Log "Sichere Formatierung auf Seite 1..." -Level STEP
         $savedFormats = New-Object System.Collections.ArrayList
 
-        # Bereich von Seite 1 ermitteln (Seitenanfang bis zu Seite 2)
         $page2Start = 0
         try {
-            $gotoRange = $document.GoTo(1, 1, 2)  # wdGoToPage=1, wdGoToAbsolute=1, Count=2
+            $gotoRange = $document.GoTo(1, 1, 2)
             $page2Start = $gotoRange.Start
         } catch {
-            # Dokument hat nur 1 Seite – dann alles schützen
             Write-Log "Dokument hat nur eine Seite – schütze gesamten Inhalt." -Level STEP
             $page2Start = $document.Content.End
         }
@@ -724,48 +723,58 @@ function Update-StandardStyle {
             Write-Log "$($savedFormats.Count) Absatz-Formatierungen auf Seite 1 gesichert." -Level STEP
         }
 
-        # Schritt 2: Standard-Style aus Vorlage in Dokument kopieren
-        Write-Log "Öffne Vorlage und lese 'Standard'-Style..." -Level STEP
-        $templateDoc = $word.Documents.Open($Global:Config.TemplatePath, $false, $true)
-        $templateDoc.Saved = $true
+        # Schritt 2: Standard-Style via OrganizerCopy aus Vorlage kopieren
+        Write-Log "Kopiere 'Standard'-Style via Organizer aus Vorlage..." -Level STEP
+        $templatePath = $Global:Config.TemplatePath
+        $docPath = $savePath
+        Write-Log "OrganizerCopy: '$templatePath' → '$docPath'" -Level STEP
 
-        $templateStyle = $templateDoc.Styles.Item("Standard")
-        $docStyle = $Document.Styles.Item("Standard")
+        # OrganizerCopy kopiert die Style-Definition inkl. aller Eigenschaften
+        # 1 = wdOrganizerObjectStyles
+        try {
+            # Word erwartet gespeicherte Dokumente für OrganizerCopy
+            $document.Save()
+            $word.OrganizerCopy($templatePath, $docPath, "Standard", 1)
+            Write-Log "OrganizerCopy erfolgreich." -Level SUCCESS
+        } catch {
+            Write-Log "OrganizerCopy fehlgeschlagen: $($_.Exception.Message)" -Level WARN
+            Write-Log "Fallback: Kopiere Einzel-Eigenschaften..." -Level STEP
 
-        # Schriftart-Eigenschaften kopieren
-        Write-Log "Kopiere Schrift-Formatierung..." -Level STEP
-        try { $docStyle.Font.Name = $templateStyle.Font.Name } catch { }
-        try { $docStyle.Font.Size = $templateStyle.Font.Size } catch { }
-        try { $docStyle.Font.Bold = $templateStyle.Font.Bold } catch { }
-        try { $docStyle.Font.Italic = $templateStyle.Font.Italic } catch { }
-        try { $docStyle.Font.Color = $templateStyle.Font.Color } catch { }
-        try { $docStyle.Font.Underline = $templateStyle.Font.Underline } catch { }
-        try { $docStyle.Font.Strikethrough = $templateStyle.Font.Strikethrough } catch { }
-        try { $docStyle.Font.Superscript = $templateStyle.Font.Superscript } catch { }
-        try { $docStyle.Font.Subscript = $templateStyle.Font.Subscript } catch { }
-        try { $docStyle.Font.Spacing = $templateStyle.Font.Spacing } catch { }
-        try { $docStyle.Font.Scaling = $templateStyle.Font.Scaling } catch { }
+            # Fallback: Einzel-Eigenschaften kopieren
+            $templateDoc = $word.Documents.Open($templatePath, $false, $true)
+            $templateDoc.Saved = $true
 
-        # Absatz-Eigenschaften kopieren
-        Write-Log "Kopiere Absatz-Formatierung..." -Level STEP
-        try { $docStyle.ParagraphFormat.Alignment = $templateStyle.ParagraphFormat.Alignment } catch { }
-        try { $docStyle.ParagraphFormat.SpaceBefore = $templateStyle.ParagraphFormat.SpaceBefore } catch { }
-        try { $docStyle.ParagraphFormat.SpaceAfter = $templateStyle.ParagraphFormat.SpaceAfter } catch { }
-        try { $docStyle.ParagraphFormat.LineSpacing = $templateStyle.ParagraphFormat.LineSpacing } catch { }
-        try { $docStyle.ParagraphFormat.LineSpacingRule = $templateStyle.ParagraphFormat.LineSpacingRule } catch { }
-        try { $docStyle.ParagraphFormat.FirstLineIndent = $templateStyle.ParagraphFormat.FirstLineIndent } catch { }
-        try { $docStyle.ParagraphFormat.LeftIndent = $templateStyle.ParagraphFormat.LeftIndent } catch { }
-        try { $docStyle.ParagraphFormat.RightIndent = $templateStyle.ParagraphFormat.RightIndent } catch { }
-        try { $docStyle.ParagraphFormat.SpaceBeforeAuto = $templateStyle.ParagraphFormat.SpaceBeforeAuto } catch { }
-        try { $docStyle.ParagraphFormat.SpaceAfterAuto = $templateStyle.ParagraphFormat.SpaceAfterAuto } catch { }
-        try { $docStyle.ParagraphFormat.WidowControl = $templateStyle.ParagraphFormat.WidowControl } catch { }
-        try { $docStyle.ParagraphFormat.KeepWithNext = $templateStyle.ParagraphFormat.KeepWithNext } catch { }
-        try { $docStyle.ParagraphFormat.KeepTogether = $templateStyle.ParagraphFormat.KeepTogether } catch { }
-        try { $docStyle.ParagraphFormat.PageBreakBefore = $templateStyle.ParagraphFormat.PageBreakBefore } catch { }
+            $templateStyle = $templateDoc.Styles.Item("Standard")
+            $docStyle = $Document.Styles.Item("Standard")
 
-        # Sprache
-        try { $docStyle.Font.NameAscii = $templateStyle.Font.NameAscii } catch { }
-        try { $docStyle.Font.NameFarEast = $templateStyle.Font.NameFarEast } catch { }
+            try { $docStyle.Font.Name = $templateStyle.Font.Name } catch { }
+            try { $docStyle.Font.Size = $templateStyle.Font.Size } catch { }
+            try { $docStyle.Font.Bold = $templateStyle.Font.Bold } catch { }
+            try { $docStyle.Font.Italic = $templateStyle.Font.Italic } catch { }
+            try { $docStyle.Font.Color = $templateStyle.Font.Color } catch { }
+            try { $docStyle.Font.Underline = $templateStyle.Font.Underline } catch { }
+            try { $docStyle.Font.Strikethrough = $templateStyle.Font.Strikethrough } catch { }
+            try { $docStyle.Font.Superscript = $templateStyle.Font.Superscript } catch { }
+            try { $docStyle.Font.Subscript = $templateStyle.Font.Subscript } catch { }
+            try { $docStyle.Font.Spacing = $templateStyle.Font.Spacing } catch { }
+            try { $docStyle.Font.Scaling = $templateStyle.Font.Scaling } catch { }
+            try { $docStyle.ParagraphFormat.Alignment = $templateStyle.ParagraphFormat.Alignment } catch { }
+            try { $docStyle.ParagraphFormat.SpaceBefore = $templateStyle.ParagraphFormat.SpaceBefore } catch { }
+            try { $docStyle.ParagraphFormat.SpaceAfter = $templateStyle.ParagraphFormat.SpaceAfter } catch { }
+            try { $docStyle.ParagraphFormat.LineSpacing = $templateStyle.ParagraphFormat.LineSpacing } catch { }
+            try { $docStyle.ParagraphFormat.LineSpacingRule = $templateStyle.ParagraphFormat.LineSpacingRule } catch { }
+            try { $docStyle.ParagraphFormat.FirstLineIndent = $templateStyle.ParagraphFormat.FirstLineIndent } catch { }
+            try { $docStyle.ParagraphFormat.LeftIndent = $templateStyle.ParagraphFormat.LeftIndent } catch { }
+            try { $docStyle.ParagraphFormat.RightIndent = $templateStyle.ParagraphFormat.RightIndent } catch { }
+            try { $docStyle.ParagraphFormat.SpaceBeforeAuto = $templateStyle.ParagraphFormat.SpaceBeforeAuto } catch { }
+            try { $docStyle.ParagraphFormat.SpaceAfterAuto = $templateStyle.ParagraphFormat.SpaceAfterAuto } catch { }
+            try { $docStyle.ParagraphFormat.WidowControl = $templateStyle.ParagraphFormat.WidowControl } catch { }
+            try { $docStyle.ParagraphFormat.KeepWithNext = $templateStyle.ParagraphFormat.KeepWithNext } catch { }
+            try { $docStyle.ParagraphFormat.KeepTogether = $templateStyle.ParagraphFormat.KeepTogether } catch { }
+            try { $docStyle.ParagraphFormat.PageBreakBefore = $templateStyle.ParagraphFormat.PageBreakBefore } catch { }
+            try { $docStyle.Font.NameAscii = $templateStyle.Font.NameAscii } catch { }
+            try { $docStyle.Font.NameFarEast = $templateStyle.Font.NameFarEast } catch { }
+        }
 
         Write-Log "Style-Formatierung aus Vorlage übernommen." -Level SUCCESS
 
@@ -798,8 +807,10 @@ function Update-StandardStyle {
         return $false
     }
     finally {
-        try { if ($null -ne $templateDoc) { $templateDoc.Close(0) | Out-Null } } catch { }
-        try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($templateDoc) | Out-Null } catch { }
+        if ($null -ne $templateDoc) {
+            try { $templateDoc.Close(0) | Out-Null } catch { }
+            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($templateDoc) | Out-Null } catch { }
+        }
         [GC]::Collect(); [GC]::WaitForPendingFinalizers()
     }
 }
