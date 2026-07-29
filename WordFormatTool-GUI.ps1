@@ -1422,11 +1422,11 @@ function Invoke-ProcessDocument {
         if ($Actions.ManualNum)  { $mn = Test-ManualNumbering -Document $document; $result.ManualNum = $mn.Count; $result.ManualNumList = @($mn) }
         if ($Actions.DeadLinks)  { $dl = Test-DeadLinks -Document $document; $result.DeadLinks = $dl.Count; $result.DeadLinkList = @($dl) }
         [System.Windows.Forms.Application]::DoEvents()
+        if ($Actions.Tables)     { $result.Tables     = Format-Tables -Document $document }
+        [System.Windows.Forms.Application]::DoEvents()
         if ($Actions.StandardStyle) { $result.StandardStyle = Update-StandardStyle -Document $document }
         [System.Windows.Forms.Application]::DoEvents()
         if ($Actions.HeaderFooter) { $result.HeaderFooter = Update-HeaderFooter -Document $document }
-        [System.Windows.Forms.Application]::DoEvents()
-        if ($Actions.Tables)     { $result.Tables     = Format-Tables -Document $document }
         [System.Windows.Forms.Application]::DoEvents()
         if ($Actions.TableCaptions)  { $result.TableCaptions  = Add-TableCaptions -Document $document }
         if ($Actions.FigureCaptions) { $result.FigureCaptions = Add-FigureCaptions -Document $document }
