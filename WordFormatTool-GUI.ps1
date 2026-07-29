@@ -249,11 +249,38 @@ function Get-TemplateStyles {
         return $result
     }
 
+    # Nur COM-Hintergrund-Word-Prozesse beenden (keine Fenster sichtbar)
+    try {
+        $existing = Get-Process -Name "WINWORD" -ErrorAction SilentlyContinue
+        foreach ($p in $existing) {
+            try {
+                if (-not $p.MainWindowHandle -or $p.MainWindowHandle -eq 0) {
+                    $p.Kill()
+                }
+            } catch { }
+        }
+    } catch { }
+
     $word = $null; $doc = $null
     try {
-        $word = New-Object -ComObject Word.Application
+        # Word-Instanz mit Retry (RPC-Fehler bei hängigen Prozessen)
+        $maxAttempts = 3
+        $attempt = 0
+        do {
+            $attempt++
+            try {
+                if ($word) { try { $word.Quit() } catch { }; $word = $null }
+                Start-Sleep -Milliseconds 200
+                $word = New-Object -ComObject Word.Application
+            } catch {
+                if ($attempt -ge $maxAttempts) { throw }
+                Start-Sleep -Milliseconds 500
+            }
+        } while ($null -eq $word -or $attempt -lt $maxAttempts)
+
         $word.Visible = $false
         $word.DisplayAlerts = 0
+        $word.ScreenUpdating = $false
 
         # Template als Dokument öffnen (schreibgeschützt, keine Dialoge)
         $doc = $word.Documents.Open($TemplatePath, $false, $true)
@@ -1365,7 +1392,20 @@ function Invoke-ProcessDocument {
         Write-Log "Backup erstellt: $([System.IO.Path]::GetFileName($backup))" -Level SUCCESS
         [System.Windows.Forms.Application]::DoEvents()
         Write-Log "Starte Word im Hintergrund..." -Level STEP
-        $word=New-Object -ComObject Word.Application; $word.Visible=$false; $word.DisplayAlerts=0
+        # Word-Instanz mit Retry bei RPC-Fehlern
+        $word = $null
+        $maxAttempts = 3
+        for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            try {
+                if ($word) { try { $word.Quit() } catch { }; $word = $null }
+                if ($attempt -gt 1) { Start-Sleep -Milliseconds 500 }
+                $word = New-Object -ComObject Word.Application
+                break
+            } catch {
+                if ($attempt -ge $maxAttempts) { throw }
+            }
+        }
+        $word.Visible = $false; $word.DisplayAlerts = 0
         [System.Windows.Forms.Application]::DoEvents()
         Write-Log "Öffne Dokument..." -Level STEP
         $document=$word.Documents.Open($DocPath)
