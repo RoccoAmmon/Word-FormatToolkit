@@ -6,9 +6,7 @@
     Ein leistungsstarkes PowerShell-WPF-Tool zur automatisierten Batch-Verarbeitung
     von Word-Dokumenten (.docx/.doc). Es repariert Überschriften, korrigiert
     Levelsprünge, entfernt doppelte Kapitelnummern, formatiert Tabellen nach
-    Vorlagen-Styles, übernimmt die Formatvorlage „Standard" aus der Vorlage,
-    übernimmt Kopf- und Fußzeilen aus der Vorlage,
-    fügt Tabellen-/Abbildungsbeschriftungen mit SEQ-Feldfunktionen
+    Vorlagen-Styles, fügt Tabellen-/Abbildungsbeschriftungen mit SEQ-Feldfunktionen
     ein, erstellt Tabellen- und Abbildungsverzeichnisse, aktualisiert
     Inhaltsverzeichnisse, prüft auf tote Links und erkennt manuelle Nummerierungen
     – alles mit Live-Log und Vergleichsbericht.
@@ -28,8 +26,6 @@
     - Link-Prüfer (tote Hyperlinks & Querverweise)
     - Manuelle Nummerierung erkennen
     - Visuelle Tabellen-Style-Vorschau (Win32-Clipboard + EMF-Export)
-    - Standard-Style aus Vorlage übernehmen (erste Seite geschützt)
-    - Kopf-/Fußzeilen aus Vorlage übernehmen
     - HTML-Vergleichsbericht (Vorher/Nachher)
     - Automatische Vorlagen-Suche in Registry + bekannten Pfaden
     - Aufräum-Routine für Logs, Reports und Backups
@@ -44,7 +40,7 @@
 
 .NOTES
     Autor   : Rocco Ammon
-    Geändert: 2026-07-30
+    Erstellt: 2026-06-10
     Version : 1.4.0
     Lizenz  : MIT
     Aufruf  : .\WordFormatTool-GUI.ps1
@@ -249,38 +245,11 @@ function Get-TemplateStyles {
         return $result
     }
 
-    # Nur COM-Hintergrund-Word-Prozesse beenden (keine Fenster sichtbar)
-    try {
-        $existing = Get-Process -Name "WINWORD" -ErrorAction SilentlyContinue
-        foreach ($p in $existing) {
-            try {
-                if (-not $p.MainWindowHandle -or $p.MainWindowHandle -eq 0) {
-                    $p.Kill()
-                }
-            } catch { }
-        }
-    } catch { }
-
     $word = $null; $doc = $null
     try {
-        # Word-Instanz mit Retry (RPC-Fehler bei hängigen Prozessen)
-        $maxAttempts = 3
-        $attempt = 0
-        do {
-            $attempt++
-            try {
-                if ($word) { try { $word.Quit() } catch { }; $word = $null }
-                Start-Sleep -Milliseconds 200
-                $word = New-Object -ComObject Word.Application
-            } catch {
-                if ($attempt -ge $maxAttempts) { throw }
-                Start-Sleep -Milliseconds 500
-            }
-        } while ($null -eq $word -or $attempt -lt $maxAttempts)
-
+        $word = New-Object -ComObject Word.Application
         $word.Visible = $false
         $word.DisplayAlerts = 0
-        $word.ScreenUpdating = $false
 
         # Template als Dokument öffnen (schreibgeschützt, keine Dialoge)
         $doc = $word.Documents.Open($TemplatePath, $false, $true)
@@ -682,18 +651,19 @@ function Update-StandardStyle {
 
     $templateDoc = $null
     $word = $Document.Application
-    $savePath = $Document.FullName
 
     try {
         # Schritt 1: Formatierung der "Standard"-Absätze auf Seite 1 sichern
         Write-Log "Sichere Formatierung auf Seite 1..." -Level STEP
         $savedFormats = New-Object System.Collections.ArrayList
 
+        # Bereich von Seite 1 ermitteln (Seitenanfang bis zu Seite 2)
         $page2Start = 0
         try {
-            $gotoRange = $document.GoTo(1, 1, 2)
+            $gotoRange = $document.GoTo(1, 1, 2)  # wdGoToPage=1, wdGoToAbsolute=1, Count=2
             $page2Start = $gotoRange.Start
         } catch {
+            # Dokument hat nur 1 Seite – dann alles schützen
             Write-Log "Dokument hat nur eine Seite – schütze gesamten Inhalt." -Level STEP
             $page2Start = $document.Content.End
         }
@@ -723,58 +693,48 @@ function Update-StandardStyle {
             Write-Log "$($savedFormats.Count) Absatz-Formatierungen auf Seite 1 gesichert." -Level STEP
         }
 
-        # Schritt 2: Standard-Style via OrganizerCopy aus Vorlage kopieren
-        Write-Log "Kopiere 'Standard'-Style via Organizer aus Vorlage..." -Level STEP
-        $templatePath = $Global:Config.TemplatePath
-        $docPath = $savePath
-        Write-Log "OrganizerCopy: '$templatePath' → '$docPath'" -Level STEP
+        # Schritt 2: Standard-Style aus Vorlage in Dokument kopieren
+        Write-Log "Öffne Vorlage und lese 'Standard'-Style..." -Level STEP
+        $templateDoc = $word.Documents.Open($Global:Config.TemplatePath, $false, $true)
+        $templateDoc.Saved = $true
 
-        # OrganizerCopy kopiert die Style-Definition inkl. aller Eigenschaften
-        # 1 = wdOrganizerObjectStyles
-        try {
-            # Word erwartet gespeicherte Dokumente für OrganizerCopy
-            $document.Save()
-            $word.OrganizerCopy($templatePath, $docPath, "Standard", 1)
-            Write-Log "OrganizerCopy erfolgreich." -Level SUCCESS
-        } catch {
-            Write-Log "OrganizerCopy fehlgeschlagen: $($_.Exception.Message)" -Level WARN
-            Write-Log "Fallback: Kopiere Einzel-Eigenschaften..." -Level STEP
+        $templateStyle = $templateDoc.Styles.Item("Standard")
+        $docStyle = $Document.Styles.Item("Standard")
 
-            # Fallback: Einzel-Eigenschaften kopieren
-            $templateDoc = $word.Documents.Open($templatePath, $false, $true)
-            $templateDoc.Saved = $true
+        # Schriftart-Eigenschaften kopieren
+        Write-Log "Kopiere Schrift-Formatierung..." -Level STEP
+        try { $docStyle.Font.Name = $templateStyle.Font.Name } catch { }
+        try { $docStyle.Font.Size = $templateStyle.Font.Size } catch { }
+        try { $docStyle.Font.Bold = $templateStyle.Font.Bold } catch { }
+        try { $docStyle.Font.Italic = $templateStyle.Font.Italic } catch { }
+        try { $docStyle.Font.Color = $templateStyle.Font.Color } catch { }
+        try { $docStyle.Font.Underline = $templateStyle.Font.Underline } catch { }
+        try { $docStyle.Font.Strikethrough = $templateStyle.Font.Strikethrough } catch { }
+        try { $docStyle.Font.Superscript = $templateStyle.Font.Superscript } catch { }
+        try { $docStyle.Font.Subscript = $templateStyle.Font.Subscript } catch { }
+        try { $docStyle.Font.Spacing = $templateStyle.Font.Spacing } catch { }
+        try { $docStyle.Font.Scaling = $templateStyle.Font.Scaling } catch { }
 
-            $templateStyle = $templateDoc.Styles.Item("Standard")
-            $docStyle = $Document.Styles.Item("Standard")
+        # Absatz-Eigenschaften kopieren
+        Write-Log "Kopiere Absatz-Formatierung..." -Level STEP
+        try { $docStyle.ParagraphFormat.Alignment = $templateStyle.ParagraphFormat.Alignment } catch { }
+        try { $docStyle.ParagraphFormat.SpaceBefore = $templateStyle.ParagraphFormat.SpaceBefore } catch { }
+        try { $docStyle.ParagraphFormat.SpaceAfter = $templateStyle.ParagraphFormat.SpaceAfter } catch { }
+        try { $docStyle.ParagraphFormat.LineSpacing = $templateStyle.ParagraphFormat.LineSpacing } catch { }
+        try { $docStyle.ParagraphFormat.LineSpacingRule = $templateStyle.ParagraphFormat.LineSpacingRule } catch { }
+        try { $docStyle.ParagraphFormat.FirstLineIndent = $templateStyle.ParagraphFormat.FirstLineIndent } catch { }
+        try { $docStyle.ParagraphFormat.LeftIndent = $templateStyle.ParagraphFormat.LeftIndent } catch { }
+        try { $docStyle.ParagraphFormat.RightIndent = $templateStyle.ParagraphFormat.RightIndent } catch { }
+        try { $docStyle.ParagraphFormat.SpaceBeforeAuto = $templateStyle.ParagraphFormat.SpaceBeforeAuto } catch { }
+        try { $docStyle.ParagraphFormat.SpaceAfterAuto = $templateStyle.ParagraphFormat.SpaceAfterAuto } catch { }
+        try { $docStyle.ParagraphFormat.WidowControl = $templateStyle.ParagraphFormat.WidowControl } catch { }
+        try { $docStyle.ParagraphFormat.KeepWithNext = $templateStyle.ParagraphFormat.KeepWithNext } catch { }
+        try { $docStyle.ParagraphFormat.KeepTogether = $templateStyle.ParagraphFormat.KeepTogether } catch { }
+        try { $docStyle.ParagraphFormat.PageBreakBefore = $templateStyle.ParagraphFormat.PageBreakBefore } catch { }
 
-            try { $docStyle.Font.Name = $templateStyle.Font.Name } catch { }
-            try { $docStyle.Font.Size = $templateStyle.Font.Size } catch { }
-            try { $docStyle.Font.Bold = $templateStyle.Font.Bold } catch { }
-            try { $docStyle.Font.Italic = $templateStyle.Font.Italic } catch { }
-            try { $docStyle.Font.Color = $templateStyle.Font.Color } catch { }
-            try { $docStyle.Font.Underline = $templateStyle.Font.Underline } catch { }
-            try { $docStyle.Font.Strikethrough = $templateStyle.Font.Strikethrough } catch { }
-            try { $docStyle.Font.Superscript = $templateStyle.Font.Superscript } catch { }
-            try { $docStyle.Font.Subscript = $templateStyle.Font.Subscript } catch { }
-            try { $docStyle.Font.Spacing = $templateStyle.Font.Spacing } catch { }
-            try { $docStyle.Font.Scaling = $templateStyle.Font.Scaling } catch { }
-            try { $docStyle.ParagraphFormat.Alignment = $templateStyle.ParagraphFormat.Alignment } catch { }
-            try { $docStyle.ParagraphFormat.SpaceBefore = $templateStyle.ParagraphFormat.SpaceBefore } catch { }
-            try { $docStyle.ParagraphFormat.SpaceAfter = $templateStyle.ParagraphFormat.SpaceAfter } catch { }
-            try { $docStyle.ParagraphFormat.LineSpacing = $templateStyle.ParagraphFormat.LineSpacing } catch { }
-            try { $docStyle.ParagraphFormat.LineSpacingRule = $templateStyle.ParagraphFormat.LineSpacingRule } catch { }
-            try { $docStyle.ParagraphFormat.FirstLineIndent = $templateStyle.ParagraphFormat.FirstLineIndent } catch { }
-            try { $docStyle.ParagraphFormat.LeftIndent = $templateStyle.ParagraphFormat.LeftIndent } catch { }
-            try { $docStyle.ParagraphFormat.RightIndent = $templateStyle.ParagraphFormat.RightIndent } catch { }
-            try { $docStyle.ParagraphFormat.SpaceBeforeAuto = $templateStyle.ParagraphFormat.SpaceBeforeAuto } catch { }
-            try { $docStyle.ParagraphFormat.SpaceAfterAuto = $templateStyle.ParagraphFormat.SpaceAfterAuto } catch { }
-            try { $docStyle.ParagraphFormat.WidowControl = $templateStyle.ParagraphFormat.WidowControl } catch { }
-            try { $docStyle.ParagraphFormat.KeepWithNext = $templateStyle.ParagraphFormat.KeepWithNext } catch { }
-            try { $docStyle.ParagraphFormat.KeepTogether = $templateStyle.ParagraphFormat.KeepTogether } catch { }
-            try { $docStyle.ParagraphFormat.PageBreakBefore = $templateStyle.ParagraphFormat.PageBreakBefore } catch { }
-            try { $docStyle.Font.NameAscii = $templateStyle.Font.NameAscii } catch { }
-            try { $docStyle.Font.NameFarEast = $templateStyle.Font.NameFarEast } catch { }
-        }
+        # Sprache
+        try { $docStyle.Font.NameAscii = $templateStyle.Font.NameAscii } catch { }
+        try { $docStyle.Font.NameFarEast = $templateStyle.Font.NameFarEast } catch { }
 
         Write-Log "Style-Formatierung aus Vorlage übernommen." -Level SUCCESS
 
@@ -804,106 +764,6 @@ function Update-StandardStyle {
     }
     catch {
         Write-Log "Fehler beim Übernehmen des Standard-Styles: $($_.Exception.Message)" -Level ERROR
-        return $false
-    }
-    finally {
-        if ($null -ne $templateDoc) {
-            try { $templateDoc.Close(0) | Out-Null } catch { }
-            try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($templateDoc) | Out-Null } catch { }
-        }
-        [GC]::Collect(); [GC]::WaitForPendingFinalizers()
-    }
-}
-
-# ============================================================================
-# KOPF-/FUSSZEILEN AUS VORLAGE ÜBERNEHMEN
-# ============================================================================
-function Update-HeaderFooter {
-    <#
-    .SYNOPSIS
-        Kopiert alle Kopf- und Fußzeilen aus der Vorlage in das Dokument.
-    .DESCRIPTION
-        Öffnet die Vorlage, liest für jeden Header/Footer-Typ (Primär, Erste Seite,
-        Gerade Seiten) den Inhalt aus dem ersten Abschnitt der Vorlage und
-        überschreibt damit alle Abschnitte des Zieldokuments.
-        Die Einstellungen "DifferentFirstPageHeaderFooter" und
-        "OddAndEvenPagesHeaderFooter" werden von der Vorlage übernommen.
-    .PARAMETER Document
-        Das Word-Dokument-COM-Objekt.
-    #>
-    param($Document)
-
-    Write-Log "Übernehme Kopf-/Fußzeilen aus Vorlage..." -Level INFO
-
-    if ([string]::IsNullOrWhiteSpace($Global:Config.TemplatePath) -or -not (Test-Path $Global:Config.TemplatePath)) {
-        Write-Log "Keine Vorlage gefunden - überspringe." -Level WARN
-        return $false
-    }
-
-    $templateDoc = $null
-    $word = $Document.Application
-
-    try {
-        Write-Log "Öffne Vorlage..." -Level STEP
-        $templateDoc = $word.Documents.Open($Global:Config.TemplatePath, $false, $true)
-        $templateDoc.Saved = $true
-
-        $srcSection = $templateDoc.Sections.Item(1)
-        $dstSectionsCount = $Document.Sections.Count
-
-        Write-Log "Vorlage hat 1 Abschnitt, Dokument hat $dstSectionsCount Abschnitt(e)." -Level STEP
-
-        # Header/Footer-Typen
-        $types = @(
-            @{Name="Header (Primär)";       Type=1; IsFooter=$false}
-            @{Name="Header (Erste Seite)";   Type=2; IsFooter=$false}
-            @{Name="Header (Gerade Seiten)"; Type=3; IsFooter=$false}
-            @{Name="Footer (Primär)";        Type=1; IsFooter=$true}
-            @{Name="Footer (Erste Seite)";   Type=2; IsFooter=$true}
-            @{Name="Footer (Gerade Seiten)"; Type=3; IsFooter=$true}
-        )
-
-        # Section-Einstellungen von der Vorlage übernehmen
-        try { $Document.PageSetup.DifferentFirstPageHeaderFooter = $templateDoc.PageSetup.DifferentFirstPageHeaderFooter } catch { }
-        try { $Document.PageSetup.OddAndEvenPagesHeaderFooter = $templateDoc.PageSetup.OddAndEvenPagesHeaderFooter } catch { }
-
-        foreach ($info in $types) {
-            $srcObj = if ($info.IsFooter) { $srcSection.Footers.Item($info.Type) } else { $srcSection.Headers.Item($info.Type) }
-
-            # Prüfen ob die Kopf-/Fußzeile Inhalt hat oder verknüpft ist
-            $hasContent = $false
-            try {
-                $srcRange = $srcObj.Range
-                if ($srcRange.Text -and $srcRange.Text.Length -gt 1) { $hasContent = $true }
-                if ($srcObj.Shapes.Count -gt 0) { $hasContent = $true }
-            } catch { }
-
-            if (-not $hasContent) { continue }
-
-            Write-Log "Kopiere $($info.Name)..." -Level STEP
-
-            # In jeden Abschnitt des Zieldokuments kopieren
-            for ($i = 1; $i -le $dstSectionsCount; $i++) {
-                try {
-                    $dstSection = $Document.Sections.Item($i)
-                    $dstObj = if ($info.IsFooter) { $dstSection.Footers.Item($info.Type) } else { $dstSection.Headers.Item($info.Type) }
-
-                    # Verknüpfung zum vorherigen Abschnitt lösen
-                    try { $dstObj.LinkToPrevious = $false } catch { }
-
-                    # FormattedText kopiert Inhalt inkl. Formatierung
-                    $dstObj.Range.FormattedText = $srcRange
-                } catch {
-                    Write-Log "Fehler bei $($info.Name) in Abschnitt ${i}: $($_.Exception.Message)" -Level WARN
-                }
-            }
-        }
-
-        Write-Log "Kopf-/Fußzeilen erfolgreich aus Vorlage übernommen." -Level SUCCESS
-        return $true
-    }
-    catch {
-        Write-Log "Fehler beim Übernehmen der Kopf-/Fußzeilen: $($_.Exception.Message)" -Level ERROR
         return $false
     }
     finally {
@@ -1389,7 +1249,7 @@ function Invoke-ProcessDocument {
         Success=$false; Error=""; BackupPath=""
         StatsBefore=$null; StatsAfter=$null
         Headings=0; Levels=0; Duplicates=0; Tables=0; TOC=0
-        TableCaptions=0; FigureCaptions=0; StandardStyle=$false; HeaderFooter=$false
+        TableCaptions=0; FigureCaptions=0; StandardStyle=$false
         DeadLinks=0; ManualNum=0; DeadLinkList=@(); ManualNumList=@(); Duration=$null
     }
     $word=$null; $document=$null; $savedOptions=@{}; $startTime=Get-Date
@@ -1403,20 +1263,7 @@ function Invoke-ProcessDocument {
         Write-Log "Backup erstellt: $([System.IO.Path]::GetFileName($backup))" -Level SUCCESS
         [System.Windows.Forms.Application]::DoEvents()
         Write-Log "Starte Word im Hintergrund..." -Level STEP
-        # Word-Instanz mit Retry bei RPC-Fehlern
-        $word = $null
-        $maxAttempts = 3
-        for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-            try {
-                if ($word) { try { $word.Quit() } catch { }; $word = $null }
-                if ($attempt -gt 1) { Start-Sleep -Milliseconds 500 }
-                $word = New-Object -ComObject Word.Application
-                break
-            } catch {
-                if ($attempt -ge $maxAttempts) { throw }
-            }
-        }
-        $word.Visible = $false; $word.DisplayAlerts = 0
+        $word=New-Object -ComObject Word.Application; $word.Visible=$false; $word.DisplayAlerts=0
         [System.Windows.Forms.Application]::DoEvents()
         Write-Log "Öffne Dokument..." -Level STEP
         $document=$word.Documents.Open($DocPath)
@@ -1433,11 +1280,9 @@ function Invoke-ProcessDocument {
         if ($Actions.ManualNum)  { $mn = Test-ManualNumbering -Document $document; $result.ManualNum = $mn.Count; $result.ManualNumList = @($mn) }
         if ($Actions.DeadLinks)  { $dl = Test-DeadLinks -Document $document; $result.DeadLinks = $dl.Count; $result.DeadLinkList = @($dl) }
         [System.Windows.Forms.Application]::DoEvents()
-        if ($Actions.Tables)     { $result.Tables     = Format-Tables -Document $document }
-        [System.Windows.Forms.Application]::DoEvents()
         if ($Actions.StandardStyle) { $result.StandardStyle = Update-StandardStyle -Document $document }
         [System.Windows.Forms.Application]::DoEvents()
-        if ($Actions.HeaderFooter) { $result.HeaderFooter = Update-HeaderFooter -Document $document }
+        if ($Actions.Tables)     { $result.Tables     = Format-Tables -Document $document }
         [System.Windows.Forms.Application]::DoEvents()
         if ($Actions.TableCaptions)  { $result.TableCaptions  = Add-TableCaptions -Document $document }
         if ($Actions.FigureCaptions) { $result.FigureCaptions = Add-FigureCaptions -Document $document }
@@ -1502,14 +1347,13 @@ function New-ComparisonReport {
             <td class='num'><span class='$( if($r.DeadLinks -gt 0){"err-text"} )'>$($r.DeadLinks)</span></td>
             <td class='num'>$($r.Tables)</td><td class='num'>$($r.TableCaptions)</td><td class='num'>$($r.FigureCaptions)</td>
             <td class='num'><span class='$( if($r.StandardStyle){"ok-text"}else{"muted-text"} )'>$(if($r.StandardStyle){"✅"}else{"–"})</span></td>
-            <td class='num'><span class='$( if($r.HeaderFooter){"ok-text"}else{"muted-text"} )'>$(if($r.HeaderFooter){"✅"}else{"–"})</span></td>
             <td class='num'>$($r.TOC)</td>
             <td>$("{0:hh\:mm\:ss}" -f $r.Duration)</td>
         </tr>
 "@
         } else {
             $rows += @"
-        <tr><td>$($r.FileName)</td><td>$badge</td><td colspan='13' class='err-text'>$($r.Error)</td><td>$("{0:hh\:mm\:ss}" -f $r.Duration)</td></tr>
+        <tr><td>$($r.FileName)</td><td>$badge</td><td colspan='12' class='err-text'>$($r.Error)</td><td>$("{0:hh\:mm\:ss}" -f $r.Duration)</td></tr>
 "@
         }
     }
@@ -1544,7 +1388,7 @@ tr:hover{background:#f0f8ff}
 <th>Datei</th><th>Status</th><th>Überschr.</th><th>Tabellen</th>
 <th>Levelsprünge<br>(vor&rarr;nach)</th><th>Duplikate<br>(vor&rarr;nach)</th>
 <th>Manuell<br>nummeriert</th><th>Tote<br>Links</th>
-<th>Tab.<br>format.</th><th>Tab.<br>Beschr.</th><th>Abb.<br>Beschr.</th><th>Standard<br>Style</th><th>Kopf/<br>Fußz.</th><th>TOC</th><th>Dauer</th>
+<th>Tab.<br>format.</th><th>Tab.<br>Beschr.</th><th>Abb.<br>Beschr.</th><th>Standard<br>Style</th><th>TOC</th><th>Dauer</th>
 </tr></thead><tbody>
 $rows
 </tbody></table>
@@ -1871,7 +1715,6 @@ function Show-MainGUI {
                     <CheckBox x:Name="chkTableCaptions" Content="🏷️ Tabellenbeschriftung" IsChecked="True" Margin="0,3"/>
                     <CheckBox x:Name="chkFigureCaptions" Content="🖼️ Abbildungsbeschriftung" IsChecked="True" Margin="0,3"/>
                     <CheckBox x:Name="chkStandardStyle" Content="📄 Standard aus Vorlage übernehmen" Margin="0,3"/>
-                    <CheckBox x:Name="chkHeaderFooter" Content="📄 Kopf-/Fußzeilen aus Vorlage übernehmen" Margin="0,3"/>
                     <Separator Margin="0,6"/>
                     <CheckBox x:Name="chkReport"     Content="📈 Vergleichsbericht" IsChecked="True" Margin="0,3"/>
                     <CheckBox x:Name="chkVerbose"    Content="🔍 Detaillierte Schritte" IsChecked="True" Margin="0,3"/>
@@ -1913,7 +1756,6 @@ function Show-MainGUI {
         chkTOC=$window.FindName("chkTOC"); chkReport=$window.FindName("chkReport"); chkVerbose=$window.FindName("chkVerbose")
         chkTableCaptions=$window.FindName("chkTableCaptions"); chkFigureCaptions=$window.FindName("chkFigureCaptions")
         chkStandardStyle=$window.FindName("chkStandardStyle")
-        chkHeaderFooter=$window.FindName("chkHeaderFooter")
         txtCleanLogs=$window.FindName("txtCleanLogs"); txtCleanReports=$window.FindName("txtCleanReports"); txtCleanBackups=$window.FindName("txtCleanBackups")
         btnStart=$window.FindName("btnStart"); btnReport=$window.FindName("btnReport"); btnCancel=$window.FindName("btnCancel")
         imgStylePreview=$window.FindName("imgStylePreview")
@@ -2133,7 +1975,6 @@ function Show-MainGUI {
             DeadLinks=$Global:UI.chkDeadLinks.IsChecked; Tables=$Global:UI.chkTables.IsChecked; TOC=$Global:UI.chkTOC.IsChecked
             TableCaptions=$Global:UI.chkTableCaptions.IsChecked; FigureCaptions=$Global:UI.chkFigureCaptions.IsChecked
             StandardStyle=$Global:UI.chkStandardStyle.IsChecked
-            HeaderFooter=$Global:UI.chkHeaderFooter.IsChecked
         }
         if (-not ($actions.Values -contains $true)) { [System.Windows.MessageBox]::Show($window, "Bitte mindestens eine Aktion wählen!", "Hinweis", "OK", "Warning")|Out-Null; return }
         if ($actions.Tables -and (-not (Test-Path $Global:Config.TemplatePath))) { [System.Windows.MessageBox]::Show($window, "Vorlage nicht gefunden!", "Vorlage fehlt", "OK", "Warning")|Out-Null; return }
