@@ -542,23 +542,22 @@ function Repair-Headings {
 function Repair-MissingHeadings {
     <#
     .SYNOPSIS
-        Findet "Standard"-Absätze mit Kapitelnummerierung und weist
-        den passenden Überschrift-Style zu.
+        Findet "Standard"-Absätze, die im Inhaltsverzeichnis erscheinen
+        (OutlineLevel 1-9 gesetzt), und weist ihnen den passenden
+        Überschrift-Style zu.
     .DESCRIPTION
-        Manche Dokumente haben Absätze mit Kapitelnummer, aber die
-        Formatvorlage steht fälschlich auf "Standard" statt "Überschrift N".
-        Die Nummer kann entweder ein echtes Word-Nummerierungsfeld (Liste)
-        oder manuell getippter Text sein. Beide Fälle werden erkannt und
-        korrigiert.
+        Ein Absatz erscheint nur dann im Inhaltsverzeichnis, wenn sein
+        OutlineLevel auf 1-9 gesetzt ist. Steht die Formatvorlage dabei
+        fälschlich auf "Standard", wird sie hier auf "Überschrift N"
+        (N = OutlineLevel) korrigiert. Die Nummerierung (Feld) bleibt
+        unverändert erhalten.
     .PARAMETER Document
         Das Word-Dokument-COM-Objekt.
     #>
     param($Document)
-    Write-Log "Suche nach 'Standard'-Absätzen mit Kapitelnummer..." -Level INFO
+    Write-Log "Suche nach 'Standard'-Absätzen mit Überschrift-Ebene (OutlineLevel)..." -Level INFO
 
     $fixed = 0
-    # Muster für manuell getippte Nummer: Ziffern mit Punkten, Leerraum, Text
-    $rxManual = '^(\d+(?:\.\d+)*\.?)[\s\t\u00A0]+(.+)$'
 
     try {
         $paraCount = $Document.Paragraphs.Count
@@ -571,36 +570,16 @@ function Repair-MissingHeadings {
                 # Nur "Standard"-Style interessiert
                 if ($styleName -ne "Standard") { continue }
 
-                $text = $range.Text -replace '\r|\n', ''
+                # OutlineLevel bestimmt die Überschrift-Ebene (1-9).
+                # wdOutlineLevelBodyText = 10 -> kein Überschrift-Absatz.
+                $ol = 0
+                try { $ol = [int]$para.OutlineLevel } catch { continue }
+                if ($ol -lt 1 -or $ol -gt 9) { continue }
+
+                $text = ($range.Text -replace '\r|\n', '').Trim()
                 if ([string]::IsNullOrWhiteSpace($text)) { continue }
 
-                $depth = 0
-                $removeManual = $false
-
-                # Fall 1: Echtes Nummerierungsfeld (Liste)
-                $listString = ""
-                try { $listString = $para.Range.ListFormat.ListString } catch { }
-                if (-not [string]::IsNullOrWhiteSpace($listString)) {
-                    # Tiefe aus der Nummer (z.B. "1.1.0" = 3 Ebenen). Endpunkt ignorieren.
-                    $numOnly = ($listString.Trim()) -replace '[^\d\.]', '' -replace '\.$', ''
-                    if ($numOnly -match '^\d') {
-                        $depth = ($numOnly -split '\.').Count
-                    } else {
-                        # Nummer ohne Punkte (z.B. reine Listen-Ebene) -> ListLevelNumber
-                        try { $depth = [int]$para.Range.ListFormat.ListLevelNumber } catch { }
-                    }
-                }
-
-                # Fall 2: Manuell getippte Nummer im Text
-                if ($depth -lt 1 -and $text -match $rxManual) {
-                    $numStr = $matches[1] -replace '\.$', ''
-                    $depth = ($numStr -split '\.').Count
-                    $removeManual = $true
-                }
-
-                if ($depth -lt 1) { continue }
-                if ($depth -gt 9) { $depth = 9 }
-
+                $depth = $ol
                 $newStyleName = "Überschrift $depth"
                 try { $newStyle = $Document.Styles.Item($newStyleName) } catch {
                     try { $newStyle = $Document.Styles.Item("Heading $depth"); $newStyleName = "Heading $depth" } catch { continue }
@@ -608,21 +587,9 @@ function Repair-MissingHeadings {
 
                 $range.Style = $newStyle
 
-                # Nur manuell getippte Nummerierung entfernen (echte Felder bleiben erhalten)
-                if ($removeManual) {
-                    $pm = [regex]::Match($text, '^(\d+(?:\.\d+)*\.?)[\s\t\u00A0]+')
-                    if ($pm.Success) {
-                        $endPos = $range.Start + $pm.Length
-                        if ($endPos -le $range.End) {
-                            ($Document.Range($range.Start, $endPos)).Text = ""
-                        }
-                    }
-                }
-
                 $fixed++
                 if ($Global:Config.VerboseSteps) {
                     $rest = $text
-                    if ($removeManual) { $rest = ($text -replace $rxManual, '$2') }
                     if ($rest.Length -gt 45) { $rest = $rest.Substring(0, 45) + "..." }
                     Write-Log "Korrigiert: Standard -> $newStyleName '$rest'" -Level STEP
                 }
