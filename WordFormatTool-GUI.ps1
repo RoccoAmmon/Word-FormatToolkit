@@ -849,14 +849,6 @@ function Update-HeaderFooter {
     <#
     .SYNOPSIS
         Klont alle Kopf- und Fußzeilen aus der Vorlage in das Dokument.
-    .DESCRIPTION
-        Öffnet die Vorlage und kopiert für jeden Header-/Footer-Typ (Primär,
-        Erste Seite, Gerade Seiten) den Inhalt aus dem ersten Abschnitt der
-        Vorlage in alle Abschnitte des Zieldokuments. Die Einstellungen
-        "DifferentFirstPage" und "OddAndEvenPages" werden von der Vorlage
-        übernommen.
-    .PARAMETER Document
-        Das Word-Dokument-COM-Objekt.
     #>
     param($Document)
 
@@ -867,8 +859,8 @@ function Update-HeaderFooter {
         return $false
     }
 
-    $templateDoc = $null
-    $word = $Document.Application
+    $templateDoc = $null; $word = $null
+    try { $word = $Document.Application } catch { return $false }
 
     try {
         Write-Log "Öffne Vorlage..." -Level STEP
@@ -879,7 +871,32 @@ function Update-HeaderFooter {
         $dstSectionsCount = $Document.Sections.Count
         Write-Log "Vorlage: 1 Abschnitt, Dokument: $dstSectionsCount Abschnitt(e)." -Level STEP
 
-        # Header/Footer-Typen: 1=Primär, 2=Erste Seite, 3=Gerade Seiten
+        # Section-Einstellungen der Vorlage auslesen
+        $tplDiffFirst = $false; $tplOddEven = $false
+        try { $tplDiffFirst = [bool]$templateDoc.PageSetup.DifferentFirstPageHeaderFooter } catch { }
+        try { $tplOddEven = [bool]$templateDoc.PageSetup.OddAndEvenPagesHeaderFooter } catch { }
+        Write-Log "Vorlage: Erste Seite anders=$tplDiffFirst, Gerade/Ungerade anders=$tplOddEven." -Level STEP
+
+        # 1. PASSE: Section-Eigenschaften setzen
+        for ($i = 1; $i -le $dstSectionsCount; $i++) {
+            try {
+                $ps = $Document.Sections.Item($i).PageSetup
+                $ps.DifferentFirstPageHeaderFooter = $tplDiffFirst
+                $ps.OddAndEvenPagesHeaderFooter = $tplOddEven
+            } catch { }
+        }
+
+        # 2. PASSE: ALLE Header/Footer in ALLEN Abschnitten entkoppeln, damit
+        #          nachfolgende Paste-Operationen nicht auf readonly-Ranges treffen.
+        for ($i = 1; $i -le $dstSectionsCount; $i++) {
+            try { $s = $Document.Sections.Item($i) } catch { continue }
+            1..3 | ForEach-Object {
+                try { $s.Headers.Item($_).LinkToPrevious = $false } catch { }
+                try { $s.Footers.Item($_).LinkToPrevious = $false } catch { }
+            }
+        }
+
+        # Header/Footer-Typen
         $types = @(
             @{Name="Kopf (Primär)";        Type=1; IsFooter=$false}
             @{Name="Kopf (Erste Seite)";   Type=2; IsFooter=$false}
@@ -889,32 +906,20 @@ function Update-HeaderFooter {
             @{Name="Fuß (Gerade Seiten)";  Type=3; IsFooter=$true}
         )
 
-        # Section-Einstellungen von der Vorlage übernehmen (erste Seite / gerade Seiten anders)
-        $tplDiffFirst = $false; $tplOddEven = $false
-        try { $tplDiffFirst = [bool]$templateDoc.PageSetup.DifferentFirstPageHeaderFooter } catch { }
-        try { $tplOddEven = [bool]$templateDoc.PageSetup.OddAndEvenPagesHeaderFooter } catch { }
-        Write-Log "Vorlage: Erste Seite anders=$tplDiffFirst, Gerade/Ungerade anders=$tplOddEven." -Level STEP
-
-        # Auf jeden Abschnitt des Zieldokuments anwenden
-        for ($i = 1; $i -le $dstSectionsCount; $i++) {
-            try {
-                $ps = $Document.Sections.Item($i).PageSetup
-                $ps.DifferentFirstPageHeaderFooter = $tplDiffFirst
-                $ps.OddAndEvenPagesHeaderFooter = $tplOddEven
-            } catch { }
-        }
-
         $cloned = 0
         foreach ($info in $types) {
-            $srcObj = if ($info.IsFooter) { $srcSection.Footers.Item($info.Type) } else { $srcSection.Headers.Item($info.Type) }
+            # Quell-Header/Footer holen (prüft auch, ob Typ existiert)
+            $srcObj = $null
+            try { $srcObj = if ($info.IsFooter) { $srcSection.Footers.Item($info.Type) } else { $srcSection.Headers.Item($info.Type) } } catch { }
+            if ($null -eq $srcObj) { continue }
 
-            # Prüfen ob die Kopf-/Fußzeile in der Vorlage Inhalt hat (Text, Grafiken, Inline-Grafiken)
+            # Prüfen, ob die Kopf-/Fußzeile in der Vorlage Inhalt hat
             $hasContent = $false
             try {
-                $srcRange = $srcObj.Range
-                if ($srcRange.Text -and $srcRange.Text.Trim().Length -gt 0) { $hasContent = $true }
-                if (-not $hasContent -and $srcObj.Shapes.Count -gt 0) { $hasContent = $true }
-                if (-not $hasContent -and $srcRange.InlineShapes.Count -gt 0) { $hasContent = $true }
+                $sr = $srcObj.Range
+                if ($sr.Text -and $sr.Text.Trim().Length -gt 0) { $hasContent = $true }
+                if (-not $hasContent) { try { if ($srcObj.Shapes.Count -gt 0) { $hasContent = $true } } catch { } }
+                if (-not $hasContent) { try { if ($sr.InlineShapes.Count -gt 0) { $hasContent = $true } } catch { } }
             } catch { }
             if (-not $hasContent) {
                 Write-Log "$($info.Name): kein Inhalt in Vorlage - übersprungen." -Level STEP
@@ -923,28 +928,47 @@ function Update-HeaderFooter {
 
             Write-Log "Klone $($info.Name)..." -Level STEP
 
+            # Vor dem Kopieren speichern, ob Shapes existieren
+            $srcHasShapes = $false
+            try { $srcHasShapes = ($srcObj.Shapes.Count -gt 0) } catch { }
+
             for ($i = 1; $i -le $dstSectionsCount; $i++) {
+                $sectionOk = $false
                 try {
                     $dstSection = $Document.Sections.Item($i)
+                    if ($null -eq $dstSection) { continue }
+
+                    # FRISCHEN Objektzugriff (nach entkoppeln in Pass 2)
                     $dstObj = if ($info.IsFooter) { $dstSection.Footers.Item($info.Type) } else { $dstSection.Headers.Item($info.Type) }
+                    if ($null -eq $dstObj) { continue }
 
-                    # Verknüpfung zum vorherigen Abschnitt lösen, damit jeder eigene Kopf-/Fußzeile hat
-                    try { $dstObj.LinkToPrevious = $false } catch { }
+                    # 2a) Range per Copy/Paste klonen (inkl. Grafiken, Formatierung)
+                    $srcObj.Range.Copy()
+                    $dstRange = $dstObj.Range
+                    if ($null -eq $dstRange) { continue }
+                    # Bestehenden Inhalt löschen, dann collapsed paste
+                    try { $dstRange.Delete() } catch { }
+                    $dstRange.Collapse(1) # wdCollapseStart
+                    $dstRange.Paste()
+                    $cloned++
+                    $sectionOk = $true
 
-                    # Primär: Range.Copy/Range.Paste (überträgt auch frei positionierte Grafiken)
-                    # Fallback: FormattedText (falls Paste im Abschnitt nicht verfügbar ist)
-                    $copied = $false
-                    try {
-                        $srcObj.Range.Copy()
-                        $dstObj.Range.Paste()
-                        $copied = $true
-                    } catch {
+                    # 2b) Frei positionierte Shapes einzeln kopieren (falls vorhanden)
+                    if ($srcHasShapes) {
                         try {
-                            $dstObj.Range.FormattedText = $srcObj.Range.FormattedText
-                            $copied = $true
+                            $shapeCount = $srcObj.Shapes.Count
+                            for ($s = 1; $s -le $shapeCount; $s++) {
+                                try {
+                                    $srcShape = $srcObj.Shapes.Item($s)
+                                    $srcShape.Copy() # Kopiert ohne Selection
+                                    $dstObj.Range.Collapse(1)
+                                    $dstObj.Range.Paste()
+                                } catch {
+                                    Write-Log "  Shape $s in $($info.Name) Abschnitt ${i}: $($_.Exception.Message)" -Level DEBUG
+                                }
+                            }
                         } catch { }
                     }
-                    if ($copied) { $cloned++ }
                 } catch {
                     Write-Log "Fehler bei $($info.Name) in Abschnitt ${i}: $($_.Exception.Message)" -Level WARN
                 }
@@ -952,7 +976,7 @@ function Update-HeaderFooter {
         }
 
         Write-Log "Kopf-/Fußzeilen geklont: $cloned übernommen." -Level SUCCESS
-        return $true
+        return ($cloned -gt 0)
     }
     catch {
         Write-Log "Fehler beim Klonen der Kopf-/Fußzeilen: $($_.Exception.Message)" -Level ERROR
