@@ -889,9 +889,20 @@ function Update-HeaderFooter {
             @{Name="Fuß (Gerade Seiten)";  Type=3; IsFooter=$true}
         )
 
-        # Section-Einstellungen von der Vorlage übernehmen
-        try { $Document.PageSetup.DifferentFirstPageHeaderFooter = $templateDoc.PageSetup.DifferentFirstPageHeaderFooter } catch { }
-        try { $Document.PageSetup.OddAndEvenPagesHeaderFooter = $templateDoc.PageSetup.OddAndEvenPagesHeaderFooter } catch { }
+        # Section-Einstellungen von der Vorlage übernehmen (erste Seite / gerade Seiten anders)
+        $tplDiffFirst = $false; $tplOddEven = $false
+        try { $tplDiffFirst = [bool]$templateDoc.PageSetup.DifferentFirstPageHeaderFooter } catch { }
+        try { $tplOddEven = [bool]$templateDoc.PageSetup.OddAndEvenPagesHeaderFooter } catch { }
+        Write-Log "Vorlage: Erste Seite anders=$tplDiffFirst, Gerade/Ungerade anders=$tplOddEven." -Level STEP
+
+        # Auf jeden Abschnitt des Zieldokuments anwenden
+        for ($i = 1; $i -le $dstSectionsCount; $i++) {
+            try {
+                $ps = $Document.Sections.Item($i).PageSetup
+                $ps.DifferentFirstPageHeaderFooter = $tplDiffFirst
+                $ps.OddAndEvenPagesHeaderFooter = $tplOddEven
+            } catch { }
+        }
 
         $cloned = 0
         foreach ($info in $types) {
