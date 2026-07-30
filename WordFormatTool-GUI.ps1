@@ -897,14 +897,18 @@ function Update-HeaderFooter {
         foreach ($info in $types) {
             $srcObj = if ($info.IsFooter) { $srcSection.Footers.Item($info.Type) } else { $srcSection.Headers.Item($info.Type) }
 
-            # Prüfen ob die Kopf-/Fußzeile in der Vorlage Inhalt hat
+            # Prüfen ob die Kopf-/Fußzeile in der Vorlage Inhalt hat (Text, Grafiken, Inline-Grafiken)
             $hasContent = $false
             try {
                 $srcRange = $srcObj.Range
-                if ($srcRange.Text -and $srcRange.Text.Length -gt 1) { $hasContent = $true }
-                if ($srcObj.Shapes.Count -gt 0) { $hasContent = $true }
+                if ($srcRange.Text -and $srcRange.Text.Trim().Length -gt 0) { $hasContent = $true }
+                if (-not $hasContent -and $srcObj.Shapes.Count -gt 0) { $hasContent = $true }
+                if (-not $hasContent -and $srcRange.InlineShapes.Count -gt 0) { $hasContent = $true }
             } catch { }
-            if (-not $hasContent) { continue }
+            if (-not $hasContent) {
+                Write-Log "$($info.Name): kein Inhalt in Vorlage - übersprungen." -Level STEP
+                continue
+            }
 
             Write-Log "Klone $($info.Name)..." -Level STEP
 
@@ -916,8 +920,10 @@ function Update-HeaderFooter {
                     # Verknüpfung zum vorherigen Abschnitt lösen, damit jeder eigene Kopf-/Fußzeile hat
                     try { $dstObj.LinkToPrevious = $false } catch { }
 
-                    # FormattedText kopiert Inhalt inkl. Formatierung
-                    $dstObj.Range.FormattedText = $srcObj.Range
+                    # Inhalt inkl. Formatierung und Grafiken per Kopieren/Einfügen übernehmen
+                    $srcObj.Range.Copy()
+                    $dstRange = $dstObj.Range
+                    $dstRange.Paste()
                     $cloned++
                 } catch {
                     Write-Log "Fehler bei $($info.Name) in Abschnitt ${i}: $($_.Exception.Message)" -Level WARN
