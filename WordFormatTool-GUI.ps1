@@ -843,6 +843,103 @@ function Update-StandardStyle {
 }
 
 # ============================================================================
+# KOPF-/FUSSZEILEN AUS VORLAGE KLONEN
+# ============================================================================
+function Update-HeaderFooter {
+    <#
+    .SYNOPSIS
+        Klont alle Kopf- und Fußzeilen aus der Vorlage in das Dokument.
+    .DESCRIPTION
+        Öffnet die Vorlage und kopiert für jeden Header-/Footer-Typ (Primär,
+        Erste Seite, Gerade Seiten) den Inhalt aus dem ersten Abschnitt der
+        Vorlage in alle Abschnitte des Zieldokuments. Die Einstellungen
+        "DifferentFirstPage" und "OddAndEvenPages" werden von der Vorlage
+        übernommen.
+    .PARAMETER Document
+        Das Word-Dokument-COM-Objekt.
+    #>
+    param($Document)
+
+    Write-Log "Klone Kopf-/Fußzeilen aus Vorlage..." -Level INFO
+
+    if ([string]::IsNullOrWhiteSpace($Global:Config.TemplatePath) -or -not (Test-Path $Global:Config.TemplatePath)) {
+        Write-Log "Keine Vorlage gefunden - überspringe." -Level WARN
+        return $false
+    }
+
+    $templateDoc = $null
+    $word = $Document.Application
+
+    try {
+        Write-Log "Öffne Vorlage..." -Level STEP
+        $templateDoc = $word.Documents.Open($Global:Config.TemplatePath, $false, $true)
+        $templateDoc.Saved = $true
+
+        $srcSection = $templateDoc.Sections.Item(1)
+        $dstSectionsCount = $Document.Sections.Count
+        Write-Log "Vorlage: 1 Abschnitt, Dokument: $dstSectionsCount Abschnitt(e)." -Level STEP
+
+        # Header/Footer-Typen: 1=Primär, 2=Erste Seite, 3=Gerade Seiten
+        $types = @(
+            @{Name="Kopf (Primär)";        Type=1; IsFooter=$false}
+            @{Name="Kopf (Erste Seite)";   Type=2; IsFooter=$false}
+            @{Name="Kopf (Gerade Seiten)"; Type=3; IsFooter=$false}
+            @{Name="Fuß (Primär)";         Type=1; IsFooter=$true}
+            @{Name="Fuß (Erste Seite)";    Type=2; IsFooter=$true}
+            @{Name="Fuß (Gerade Seiten)";  Type=3; IsFooter=$true}
+        )
+
+        # Section-Einstellungen von der Vorlage übernehmen
+        try { $Document.PageSetup.DifferentFirstPageHeaderFooter = $templateDoc.PageSetup.DifferentFirstPageHeaderFooter } catch { }
+        try { $Document.PageSetup.OddAndEvenPagesHeaderFooter = $templateDoc.PageSetup.OddAndEvenPagesHeaderFooter } catch { }
+
+        $cloned = 0
+        foreach ($info in $types) {
+            $srcObj = if ($info.IsFooter) { $srcSection.Footers.Item($info.Type) } else { $srcSection.Headers.Item($info.Type) }
+
+            # Prüfen ob die Kopf-/Fußzeile in der Vorlage Inhalt hat
+            $hasContent = $false
+            try {
+                $srcRange = $srcObj.Range
+                if ($srcRange.Text -and $srcRange.Text.Length -gt 1) { $hasContent = $true }
+                if ($srcObj.Shapes.Count -gt 0) { $hasContent = $true }
+            } catch { }
+            if (-not $hasContent) { continue }
+
+            Write-Log "Klone $($info.Name)..." -Level STEP
+
+            for ($i = 1; $i -le $dstSectionsCount; $i++) {
+                try {
+                    $dstSection = $Document.Sections.Item($i)
+                    $dstObj = if ($info.IsFooter) { $dstSection.Footers.Item($info.Type) } else { $dstSection.Headers.Item($info.Type) }
+
+                    # Verknüpfung zum vorherigen Abschnitt lösen, damit jeder eigene Kopf-/Fußzeile hat
+                    try { $dstObj.LinkToPrevious = $false } catch { }
+
+                    # FormattedText kopiert Inhalt inkl. Formatierung
+                    $dstObj.Range.FormattedText = $srcObj.Range
+                    $cloned++
+                } catch {
+                    Write-Log "Fehler bei $($info.Name) in Abschnitt ${i}: $($_.Exception.Message)" -Level WARN
+                }
+            }
+        }
+
+        Write-Log "Kopf-/Fußzeilen geklont: $cloned übernommen." -Level SUCCESS
+        return $true
+    }
+    catch {
+        Write-Log "Fehler beim Klonen der Kopf-/Fußzeilen: $($_.Exception.Message)" -Level ERROR
+        return $false
+    }
+    finally {
+        try { if ($null -ne $templateDoc) { $templateDoc.Close(0) | Out-Null } } catch { }
+        try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($templateDoc) | Out-Null } catch { }
+        [GC]::Collect(); [GC]::WaitForPendingFinalizers()
+    }
+}
+
+# ============================================================================
 # TABELLEN FORMATIEREN
 # ============================================================================
 function Format-Tables {
@@ -1318,7 +1415,7 @@ function Invoke-ProcessDocument {
         Success=$false; Error=""; BackupPath=""
         StatsBefore=$null; StatsAfter=$null
         Headings=0; Levels=0; Duplicates=0; Tables=0; TOC=0
-        TableCaptions=0; FigureCaptions=0; StandardStyle=$false
+        TableCaptions=0; FigureCaptions=0; StandardStyle=$false; HeaderFooter=$false
         DeadLinks=0; ManualNum=0; DeadLinkList=@(); ManualNumList=@(); Duration=$null
     }
     $word=$null; $document=$null; $savedOptions=@{}; $startTime=Get-Date
@@ -1350,6 +1447,8 @@ function Invoke-ProcessDocument {
         if ($Actions.DeadLinks)  { $dl = Test-DeadLinks -Document $document; $result.DeadLinks = $dl.Count; $result.DeadLinkList = @($dl) }
         [System.Windows.Forms.Application]::DoEvents()
         if ($Actions.StandardStyle) { $result.StandardStyle = Update-StandardStyle -Document $document }
+        [System.Windows.Forms.Application]::DoEvents()
+        if ($Actions.HeaderFooter) { $result.HeaderFooter = Update-HeaderFooter -Document $document }
         [System.Windows.Forms.Application]::DoEvents()
         if ($Actions.Tables)     { $result.Tables     = Format-Tables -Document $document }
         [System.Windows.Forms.Application]::DoEvents()
@@ -1416,13 +1515,14 @@ function New-ComparisonReport {
             <td class='num'><span class='$( if($r.DeadLinks -gt 0){"err-text"} )'>$($r.DeadLinks)</span></td>
             <td class='num'>$($r.Tables)</td><td class='num'>$($r.TableCaptions)</td><td class='num'>$($r.FigureCaptions)</td>
             <td class='num'><span class='$( if($r.StandardStyle){"ok-text"}else{"muted-text"} )'>$(if($r.StandardStyle){"✅"}else{"–"})</span></td>
+            <td class='num'><span class='$( if($r.HeaderFooter){"ok-text"}else{"muted-text"} )'>$(if($r.HeaderFooter){"✅"}else{"–"})</span></td>
             <td class='num'>$($r.TOC)</td>
             <td>$("{0:hh\:mm\:ss}" -f $r.Duration)</td>
         </tr>
 "@
         } else {
             $rows += @"
-        <tr><td>$($r.FileName)</td><td>$badge</td><td colspan='12' class='err-text'>$($r.Error)</td><td>$("{0:hh\:mm\:ss}" -f $r.Duration)</td></tr>
+        <tr><td>$($r.FileName)</td><td>$badge</td><td colspan='13' class='err-text'>$($r.Error)</td><td>$("{0:hh\:mm\:ss}" -f $r.Duration)</td></tr>
 "@
         }
     }
@@ -1457,7 +1557,7 @@ tr:hover{background:#f0f8ff}
 <th>Datei</th><th>Status</th><th>Überschr.</th><th>Tabellen</th>
 <th>Levelsprünge<br>(vor&rarr;nach)</th><th>Duplikate<br>(vor&rarr;nach)</th>
 <th>Manuell<br>nummeriert</th><th>Tote<br>Links</th>
-<th>Tab.<br>format.</th><th>Tab.<br>Beschr.</th><th>Abb.<br>Beschr.</th><th>Standard<br>Style</th><th>TOC</th><th>Dauer</th>
+<th>Tab.<br>format.</th><th>Tab.<br>Beschr.</th><th>Abb.<br>Beschr.</th><th>Standard<br>Style</th><th>Kopf/<br>Fußz.</th><th>TOC</th><th>Dauer</th>
 </tr></thead><tbody>
 $rows
 </tbody></table>
@@ -1784,6 +1884,7 @@ function Show-MainGUI {
                     <CheckBox x:Name="chkTableCaptions" Content="🏷️ Tabellenbeschriftung" IsChecked="True" Margin="0,3"/>
                     <CheckBox x:Name="chkFigureCaptions" Content="🖼️ Abbildungsbeschriftung" IsChecked="True" Margin="0,3"/>
                     <CheckBox x:Name="chkStandardStyle" Content="📄 Standard aus Vorlage übernehmen" Margin="0,3"/>
+                    <CheckBox x:Name="chkHeaderFooter" Content="📑 Kopf-/Fußzeilen aus Vorlage klonen" Margin="0,3"/>
                     <Separator Margin="0,6"/>
                     <CheckBox x:Name="chkReport"     Content="📈 Vergleichsbericht" IsChecked="True" Margin="0,3"/>
                     <CheckBox x:Name="chkVerbose"    Content="🔍 Detaillierte Schritte" IsChecked="True" Margin="0,3"/>
@@ -1825,6 +1926,7 @@ function Show-MainGUI {
         chkTOC=$window.FindName("chkTOC"); chkReport=$window.FindName("chkReport"); chkVerbose=$window.FindName("chkVerbose")
         chkTableCaptions=$window.FindName("chkTableCaptions"); chkFigureCaptions=$window.FindName("chkFigureCaptions")
         chkStandardStyle=$window.FindName("chkStandardStyle")
+        chkHeaderFooter=$window.FindName("chkHeaderFooter")
         txtCleanLogs=$window.FindName("txtCleanLogs"); txtCleanReports=$window.FindName("txtCleanReports"); txtCleanBackups=$window.FindName("txtCleanBackups")
         btnStart=$window.FindName("btnStart"); btnReport=$window.FindName("btnReport"); btnCancel=$window.FindName("btnCancel")
         imgStylePreview=$window.FindName("imgStylePreview")
@@ -2044,6 +2146,7 @@ function Show-MainGUI {
             DeadLinks=$Global:UI.chkDeadLinks.IsChecked; Tables=$Global:UI.chkTables.IsChecked; TOC=$Global:UI.chkTOC.IsChecked
             TableCaptions=$Global:UI.chkTableCaptions.IsChecked; FigureCaptions=$Global:UI.chkFigureCaptions.IsChecked
             StandardStyle=$Global:UI.chkStandardStyle.IsChecked
+            HeaderFooter=$Global:UI.chkHeaderFooter.IsChecked
         }
         if (-not ($actions.Values -contains $true)) { [System.Windows.MessageBox]::Show($window, "Bitte mindestens eine Aktion wählen!", "Hinweis", "OK", "Warning")|Out-Null; return }
         if ($actions.Tables -and (-not (Test-Path $Global:Config.TemplatePath))) { [System.Windows.MessageBox]::Show($window, "Vorlage nicht gefunden!", "Vorlage fehlt", "OK", "Warning")|Out-Null; return }
