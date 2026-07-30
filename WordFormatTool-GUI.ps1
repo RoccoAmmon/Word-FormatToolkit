@@ -920,10 +920,8 @@ function Update-HeaderFooter {
                     # Verknüpfung zum vorherigen Abschnitt lösen, damit jeder eigene Kopf-/Fußzeile hat
                     try { $dstObj.LinkToPrevious = $false } catch { }
 
-                    # Inhalt inkl. Formatierung und Grafiken per Kopieren/Einfügen übernehmen
-                    $srcObj.Range.Copy()
-                    $dstRange = $dstObj.Range
-                    $dstRange.Paste()
+                    # Inhalt inkl. Formatierung ohne Zwischenablage übernehmen
+                    $dstObj.Range.FormattedText = $srcObj.Range.FormattedText
                     $cloned++
                 } catch {
                     Write-Log "Fehler bei $($info.Name) in Abschnitt ${i}: $($_.Exception.Message)" -Level WARN
