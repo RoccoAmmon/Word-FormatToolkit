@@ -920,8 +920,24 @@ function Update-HeaderFooter {
                     # Verknüpfung zum vorherigen Abschnitt lösen, damit jeder eigene Kopf-/Fußzeile hat
                     try { $dstObj.LinkToPrevious = $false } catch { }
 
-                    # Inhalt inkl. Formatierung ohne Zwischenablage übernehmen
+                    # Text/Inline-Formatierung ohne Zwischenablage übernehmen
                     $dstObj.Range.FormattedText = $srcObj.Range.FormattedText
+
+                    # Frei positionierte Grafiken/Shapes separat übernehmen (nicht Teil von FormattedText)
+                    try {
+                        if ($srcObj.Shapes.Count -gt 0) {
+                            for ($s = 1; $s -le $srcObj.Shapes.Count; $s++) {
+                                try {
+                                    $srcShape = $srcObj.Shapes.Item($s)
+                                    $srcShape.Select()
+                                    $word.Selection.Copy()
+                                    $dstObj.Range.Select()
+                                    $word.Selection.Collapse(1)
+                                    $word.Selection.Paste()
+                                } catch { }
+                            }
+                        }
+                    } catch { }
                     $cloned++
                 } catch {
                     Write-Log "Fehler bei $($info.Name) in Abschnitt ${i}: $($_.Exception.Message)" -Level WARN
