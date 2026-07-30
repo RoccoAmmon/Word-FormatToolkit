@@ -18,6 +18,7 @@
     - Überschriften-Reparatur (Style-Neuaufsetzung)
     - Levelsprung-Korrektur (automatische Hierarchie-Fix)
     - Doppelte Kapitelnummern entfernen
+    - Fehlende Überschriften erkennen (Standard-Stil mit Kapitelnummer → Überschrift N)
     - Tabellen-Formatierung nach wählbarem Vorlagen-Style
     - Tabellenbeschriftung (SEQ-Feld, Kapitelüberschrift als Text)
     - Abbildungsbeschriftung (SEQ-Feld, Kapitelüberschrift als Text)
@@ -28,6 +29,7 @@
     - Manuelle Nummerierung erkennen
     - Visuelle Tabellen-Style-Vorschau (Win32-Clipboard + EMF-Export)
     - Standard-Style aus Vorlage übernehmen (erste Seite geschützt)
+    - Kopf-/Fußzeilen aus Vorlage klonen (Primär, Erste Seite, Gerade Seiten)
     - HTML-Vergleichsbericht (Vorher/Nachher)
     - Automatische Vorlagen-Suche in Registry + bekannten Pfaden
     - Aufräum-Routine für Logs, Reports und Backups
@@ -42,8 +44,8 @@
 
 .NOTES
     Autor   : Rocco Ammon
-    Geändert: 2026-07-29
-    Version : 1.4.0
+    Geändert: 2026-07-30
+    Version : 1.6.0
     Lizenz  : MIT
     Aufruf  : .\WordFormatTool-GUI.ps1
     Wiki    : https://github.com/RoccoAmmon/Word-FormatToolkit/wiki

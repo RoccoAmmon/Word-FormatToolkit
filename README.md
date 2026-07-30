@@ -1,9 +1,9 @@
-# 📄 Word-Format-Toolkit v1.5
+# 📄 Word-Format-Toolkit v1.6
 
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)](https://docs.microsoft.com/en-us/powershell/)
 [![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)](https://www.microsoft.com/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.5.0-purple)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-1.6.0-purple)](CHANGELOG.md)
 
 > **Batch-Formatierung und Qualitätssicherung für Microsoft Word-Dokumente**  
 > PowerShell-WPF-Tool zur automatisierten Reparatur von Überschriften, Tabellen, Nummerierungen, Links und Formatvorlagen in Word-Dokumenten (.docx/.doc).
@@ -42,6 +42,12 @@
 - Erkennt manuell eingegebene Nummern am Überschrift-Anfang
 - Entfernt diese, wenn automatische Nummerierung aktiv ist
 - Verhindert doppelte Darstellung („1.1 1.1 Einleitung")
+
+### 🔍 Fehlende Überschriften erkennen (`Repair-MissingHeadings`)
+- Erkennt Absätze im Stil „Standard", die trotzdem eine Kapitelnummerierung haben (Gliederungsebene 1–9)
+- Korrigiert den Stil automatisch auf „Überschrift N" / „Heading N"
+- Die Nummerierung (automatisches Nummerierungsfeld) bleibt unverändert erhalten
+- Hilfreich bei Dokumenten, deren Überschriften durch Kopieren/Einfügen den Stil verloren haben
 
 ### 📊 Tabellen-Formatierung & Vorschau
 - Wähle einen beliebigen Tabellen-Style aus der gewählten Vorlage (.dotx/.dotm)
@@ -191,7 +197,8 @@ Der HTML-Vergleichsbericht zeigt pro Dokument:
 - **Doppelte Nummern** vor → nach
 - **Manuelle Nummerierung** (gefunden)
 - **Tote Links** (gefunden)
-- **Formatierte Tabellen** & **TOC-Updates**
+- **Formatierte Tabellen** & **TOC-Updates** & **Kopf-/Fußzeilen**
+- **Standard-Style übernommen** & **Kopf-/Fußzeilen geklont**
 - **Dauer** pro Dokument
 
 Der Bericht wird unter `C:\ScriptLog\Reports\Vergleichsbericht_*.html` gespeichert.
@@ -210,8 +217,10 @@ WordFormatTool-GUI.ps1
 │   ├── Repair-Headings          – Überschriften neu aufsetzen
 │   ├── Repair-HeadingLevels     – Levelsprünge korrigieren
 │   ├── Remove-DuplicateHeadingNumbers – Doppelte Nummern entfernen
+│   ├── Repair-MissingHeadings   – Fehlende Überschriften erkennen
 │   ├── Format-Tables            – Tabellen nach Vorlagen-Style formatieren
 │   ├── Update-DocumentTOC       – Inhaltsverzeichnisse aktualisieren
+│   ├── Update-HeaderFooter      – Kopf-/Fußzeilen aus Vorlage klonen
 │   ├── Test-DeadLinks           – Tote Links prüfen
 │   ├── Test-ManualNumbering     – Manuelle Nummerierung erkennen
 │   └── Get-DocumentStats        – Vorher/Nachher-Statistik

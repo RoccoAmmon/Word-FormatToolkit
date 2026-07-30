@@ -7,6 +7,19 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ---
 
+## [1.6.0] – 2026-07-30
+
+### Added
+- **Fehlende Überschriften erkennen und korrigieren** (`Repair-MissingHeadings`) – Absätze mit Stil "Standard" (Normal), die eine Kapitelnummerierung (Gliederungsebene 1–9) haben, werden automatisch auf "Überschrift N" (bzw. "Heading N") gesetzt. Die Nummerierung bleibt erhalten, nur der Stil wird korrigiert.
+- **Kopf-/Fußzeilen aus Vorlage klonen** (`Update-HeaderFooter`) – Alle Kopf- und Fußzeilen (Primär, Erste Seite, Gerade Seiten) werden aus der Vorlage in alle Abschnitte des Dokuments kopiert. Die Einstellungen "DifferentFirstPage" und "OddAndEvenPages" werden von der Vorlage übernommen und auf jeden Abschnitt angewendet. Inklusive frei positionierter Grafiken/Shapes.
+- **HTML-Report** – Neue Spalte "Kopf/Fußz." im Vergleichsbericht
+
+### Fixed
+- **Kopf-/Fußzeilen-Klon robust gemacht** – Zwei-Pass-Verfahren (erst entkoppeln, dann kopieren) eliminiert "Befehl nicht verfügbar"-Fehler bei verlinkten Abschnitten. Fallback auf `FormattedText` bei fehlgeschlagenem `Range.Paste`.
+- **Frei positionierte Grafiken in Kopf-/Fußzeilen** – Werden jetzt per `Range.Copy`/`Range.Paste` statt `FormattedText` übertragen, wodurch auch Shapes korrekt kopiert werden.
+
+---
+
 ## [1.5.0] – 2026-07-30
 
 ### Added
