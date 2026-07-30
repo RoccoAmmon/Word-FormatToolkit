@@ -908,7 +908,7 @@ function Update-HeaderFooter {
 
         $cloned = 0
         foreach ($info in $types) {
-            # Quell-Header/Footer holen (prüft auch, ob Typ existiert)
+            # Quell-Header/Footer holen
             $srcObj = $null
             try { $srcObj = if ($info.IsFooter) { $srcSection.Footers.Item($info.Type) } else { $srcSection.Headers.Item($info.Type) } } catch { }
             if ($null -eq $srcObj) { continue }
@@ -928,51 +928,45 @@ function Update-HeaderFooter {
 
             Write-Log "Klone $($info.Name)..." -Level STEP
 
-            # Vor dem Kopieren speichern, ob Shapes existieren
-            $srcHasShapes = $false
-            try { $srcHasShapes = ($srcObj.Shapes.Count -gt 0) } catch { }
-
             for ($i = 1; $i -le $dstSectionsCount; $i++) {
-                $sectionOk = $false
                 try {
                     $dstSection = $Document.Sections.Item($i)
                     if ($null -eq $dstSection) { continue }
 
-                    # FRISCHEN Objektzugriff (nach entkoppeln in Pass 2)
+                    # Frischer Objektzugriff nach dem Entkoppeln
                     $dstObj = if ($info.IsFooter) { $dstSection.Footers.Item($info.Type) } else { $dstSection.Headers.Item($info.Type) }
                     if ($null -eq $dstObj) { continue }
 
-                    # 2a) Range per Copy/Paste klonen (inkl. Grafiken, Formatierung)
-                    $srcObj.Range.Copy()
-                    $dstRange = $dstObj.Range
-                    if ($null -eq $dstRange) { continue }
-                    # Bestehenden Inhalt löschen, dann collapsed paste
-                    try { $dstRange.Delete() } catch { }
-                    $dstRange.Collapse(1) # wdCollapseStart
-                    $dstRange.Paste()
-                    $cloned++
-                    $sectionOk = $true
-
-                    # 2b) Frei positionierte Shapes einzeln kopieren (falls vorhanden)
-                    if ($srcHasShapes) {
+                    $copied = $false
+                    # Methode A: Range.Copy + Range.Paste (überträgt auch Shapes)
+                    try {
+                        $srcObj.Range.Copy()
+                        $dstObj.Range.Paste()
+                        $copied = $true
+                    } catch {
+                        # Methode B: FormattedText-Fallback (Text/Inline, robuster)
                         try {
-                            $shapeCount = $srcObj.Shapes.Count
-                            for ($s = 1; $s -le $shapeCount; $s++) {
-                                try {
-                                    $srcShape = $srcObj.Shapes.Item($s)
-                                    $srcShape.Copy() # Kopiert ohne Selection
-                                    $dstObj.Range.Collapse(1)
-                                    $dstObj.Range.Paste()
-                                } catch {
-                                    Write-Log "  Shape $s in $($info.Name) Abschnitt ${i}: $($_.Exception.Message)" -Level DEBUG
-                                }
-                            }
+                            $dstObj.Range.FormattedText = $srcObj.Range.FormattedText
+                            $copied = $true
                         } catch { }
                     }
+
+                    if ($copied) { $cloned++ }
+
+                    if ($copied) { $cloned++ }
                 } catch {
                     Write-Log "Fehler bei $($info.Name) in Abschnitt ${i}: $($_.Exception.Message)" -Level WARN
                 }
             }
+        }
+
+        # 3. PASSE: Abschnittseinstellungen nochmals verifizieren (könnten durch Paste zurückgesetzt sein)
+        for ($i = 1; $i -le $dstSectionsCount; $i++) {
+            try {
+                $ps = $Document.Sections.Item($i).PageSetup
+                if (-not $ps.DifferentFirstPageHeaderFooter -and $tplDiffFirst) { $ps.DifferentFirstPageHeaderFooter = $true }
+                if (-not $ps.OddAndEvenPagesHeaderFooter -and $tplOddEven) { $ps.OddAndEvenPagesHeaderFooter = $true }
+            } catch { }
         }
 
         Write-Log "Kopf-/Fußzeilen geklont: $cloned übernommen." -Level SUCCESS
