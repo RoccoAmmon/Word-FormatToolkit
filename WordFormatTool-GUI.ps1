@@ -9,7 +9,8 @@
     Vorlagen-Styles, übernimmt die Formatvorlage „Standard" aus der Vorlage,
     fügt Tabellen-/Abbildungsbeschriftungen mit SEQ-Feldfunktionen
     ein, erstellt Tabellen- und Abbildungsverzeichnisse, aktualisiert
-    Inhaltsverzeichnisse, prüft auf tote Links und erkennt manuelle Nummerierungen
+    Inhaltsverzeichnisse, prüft auf tote Links, wandelt manuell nummerierte
+    Standard-Absätze in Überschriften um und erkennt manuelle Nummerierungen
     – alles mit Live-Log und Vergleichsbericht.
 
     Features:
@@ -26,7 +27,7 @@
     - Abbildungsverzeichnis erstellen/aktualisieren
     - Inhaltsverzeichnis-Update (TOC, Felder, Kopf-/Fußzeilen)
     - Link-Prüfer (tote Hyperlinks & Querverweise)
-    - Manuelle Nummerierung erkennen
+    - Manuelle Nummerierung fixen (Standard → Überschrift) + erkennen
     - Visuelle Tabellen-Style-Vorschau (Win32-Clipboard + EMF-Export)
     - Standard-Style aus Vorlage übernehmen (erste Seite geschützt)
     - Kopf-/Fußzeilen aus Vorlage klonen (Primär, Erste Seite, Gerade Seiten)
@@ -44,8 +45,8 @@
 
 .NOTES
     Autor   : Rocco Ammon
-    Geändert: 2026-07-30
-    Version : 1.6.0
+    Geändert: 2026-09-30
+    Version : 1.7.0
     Lizenz  : MIT
     Aufruf  : .\WordFormatTool-GUI.ps1
     Wiki    : https://github.com/RoccoAmmon/Word-FormatToolkit/wiki
@@ -1140,6 +1141,90 @@ function Test-ManualNumbering {
 }
 
 # ============================================================================
+# MANUELL NUMMERIERTE STANDARD-ABSÄTZE IN ÜBERSCHRIFTEN UMWANDELN
+# ============================================================================
+function Repair-ManualNumberingHeadings {
+    <#
+    .SYNOPSIS
+        Wandelt "Standard"-Absätze mit manuell getippter Nummerierung
+        (z.B. "2 Startinvestition", "2.1 Ziele") in echte Überschriften um.
+    .DESCRIPTION
+        Test-ManualNumbering findet nur Absätze, die BEREITS eine
+        Überschrift-Formatvorlage haben. Ein normaler "Standard"-Absatz wie
+        "2 Startinvestition" (OutlineLevel = BodyText) wird dort nie gefunden
+        und auch von Repair-MissingHeadings ignoriert (das braucht
+        OutlineLevel 1-9). Diese Funktion schließt die Lücke: Sie scannt
+        "Standard"/"Normal"-Absätze ohne Auto-Nummerierung auf das Muster
+        "Zahl [Zahl...] Text" und weist den passenden Stil "Überschrift N" zu.
+        Die Ebene N ergibt sich aus der Gliederungstiefe ("2"->1, "2.1"->2,
+        "2.1.3"->3). Der Text bleibt erhalten; falls die Überschrift-Styles
+        automatisch nummerieren, entfernt der nachfolgende Schritt
+        Remove-DuplicateHeadingNumbers das doppelte Präfix.
+    .PARAMETER Document
+        Das Word-Dokument-COM-Objekt.
+    #>
+    param($Document)
+    Write-Log "Wandle manuell nummerierte Standard-Absätze in Überschriften um..." -Level INFO
+    $rx = '^(\d+(?:\.\d+)*\.?)[\s\t\u00A0]+(.+)$'
+    $fixed = 0
+    try {
+        $paraCount = $Document.Paragraphs.Count
+        for ($i = 1; $i -le $paraCount; $i++) {
+            try {
+                $para = $Document.Paragraphs.Item($i)
+                $range = $para.Range
+                $styleName = ""
+                try { $styleName = $range.Style.NameLocal } catch { continue }
+                if ($styleName -notin @("Standard", "Normal")) { continue }
+                # Tabellen-Zellen überspringen (keine Überschriften dort vermuten)
+                try { if ($range.Tables.Count -gt 0) { continue } } catch { }
+                # Echte Listen / Auto-Nummerierung ausschließen
+                $an = ""
+                try { $an = ($range.ListFormat.ListString -replace '\s', '').Trim() } catch { }
+                if (-not [string]::IsNullOrWhiteSpace($an)) { continue }
+                try { if ([int]$range.ListFormat.ListType -ne 0) { continue } } catch { }
+                $text = ($range.Text -replace '\r|\n', '').Trim()
+                if ([string]::IsNullOrWhiteSpace($text)) { continue }
+                if ($text -notmatch $rx) { continue }
+                $num = $matches[1]
+                $rest = $matches[2].Trim()
+                if ([string]::IsNullOrWhiteSpace($rest)) { continue }
+                if ($rest.Length -lt 2) { continue }
+                if ($text.Length -gt 150) { continue }  # lange Fließtext-Sätze keine Überschriften
+                # Ebene aus Gliederungstiefe ableiten: "2"->1, "2.1"->2, "2.1.3"->3
+                $parts = @($num.Split('.') | Where-Object { $_ -ne '' })
+                # Schutz vor Fehltreffern: Jahreszahlen ("2024 Umsatz ...") und
+                # große Einzelzahlen ("150 Mitarbeiter ...") sind keine Überschriften
+                if ($parts.Count -eq 1) {
+                    $intVal = 0
+                    if ([int]::TryParse($parts[0], [ref]$intVal)) {
+                        if ($intVal -gt 99) { continue }
+                    }
+                }
+                $depth = $parts.Count
+                if ($depth -lt 1) { $depth = 1 }
+                if ($depth -gt 9) { $depth = 9 }
+                $newStyleName = "Überschrift $depth"
+                try { $newStyle = $Document.Styles.Item($newStyleName) } catch {
+                    try { $newStyle = $Document.Styles.Item("Heading $depth"); $newStyleName = "Heading $depth" } catch { continue }
+                }
+                $range.Style = $newStyle
+                $fixed++
+                if ($Global:Config.VerboseSteps) {
+                    $p = $text
+                    if ($p.Length -gt 45) { $p = $p.Substring(0, 45) + "..." }
+                    Write-Log "Konvertiert: Standard -> $newStyleName '$p'" -Level STEP
+                }
+            } catch { }
+        }
+    } catch {
+        Write-Log "Fehler bei der Konvertierung manueller Nummerierungen: $($_.Exception.Message)" -Level ERROR
+    }
+    Write-Log "Manuell nummerierte Standard-Absätze konvertiert: $fixed" -Level SUCCESS
+    return $fixed
+}
+
+# ============================================================================
 # AUFRÄUM-ROUTINE
 # ============================================================================
 function Invoke-Cleanup {
@@ -1487,6 +1572,7 @@ function Invoke-ProcessDocument {
         Write-Log ("Vorher: Headings={0}, Levelsprünge={1}, Duplikate={2}, Manuell={3}, Tabellen={4}" -f $result.StatsBefore.Headings,$result.StatsBefore.LevelJumps,$result.StatsBefore.DuplicateNum,$result.StatsBefore.ManualNum,$result.StatsBefore.Tables) -Level INFO
         [System.Windows.Forms.Application]::DoEvents()
         if ($Actions.Headings)   { $result.Headings   = Repair-Headings -Document $document; $result.Headings = $result.Headings + (Repair-MissingHeadings -Document $document) }
+        if ($Actions.ManualNum)  { $result.Headings = $result.Headings + (Repair-ManualNumberingHeadings -Document $document) }
         if ($Actions.Levels)     { $result.Levels     = Repair-HeadingLevels -Document $document }
         if ($Actions.Duplicates) { $result.Duplicates = Remove-DuplicateHeadingNumbers -Document $document }
         if ($Actions.ManualNum)  { $mn = Test-ManualNumbering -Document $document; $result.ManualNum = $mn.Count; $result.ManualNumList = @($mn) }
@@ -1922,8 +2008,8 @@ function Show-MainGUI {
                     <TextBlock Text="⚙️ Aktionen" FontWeight="Bold" Margin="0,0,0,6"/>
                     <CheckBox x:Name="chkHeadings"   Content="📝 Überschriften reparieren" IsChecked="True" Margin="0,3"/>
                     <CheckBox x:Name="chkLevels"     Content="🔢 Levelsprünge korrigieren" IsChecked="True" Margin="0,3"/>
+                    <CheckBox x:Name="chkManualNum"  Content="✏️ Manuelle Nummerierung" Margin="0,3"/>
                     <CheckBox x:Name="chkDuplicates" Content="🔁 Doppelte Nummern entfernen" IsChecked="True" Margin="0,3"/>
-                    <CheckBox x:Name="chkManualNum"  Content="✏️ Manuelle Nummerierung finden" Margin="0,3"/>
                     <CheckBox x:Name="chkDeadLinks"  Content="🔗 Tote Links prüfen" Margin="0,3"/>
                     <CheckBox x:Name="chkTables"     Content="📊 Tabellen formatieren" IsChecked="True" Margin="0,3"/>
                     <CheckBox x:Name="chkTOC"        Content="📑 Inhaltsverzeichnis updaten" IsChecked="True" Margin="0,3"/>
@@ -2249,14 +2335,21 @@ function Show-MainGUI {
             [System.Windows.Forms.Application]::DoEvents()
             $Global:LastReportPath=New-ComparisonReport -Results $resultArr
             $Global:UI.btnReport.IsEnabled=$true
+            # Vergleichsbericht automatisch öffnen, wenn aktiviert
+            if ($Global:LastReportPath -and (Test-Path $Global:LastReportPath)) {
+                Start-Process $Global:LastReportPath
+            }
         }
 
         $cn=if($Global:Sync.CancelRequested){"`n(Abgebrochen durch Benutzer)"}else{""}
         $msg="Verarbeitung beendet!`n`nErfolgreich: $okCount`nFehler: $errCount$cn"
-        # MessageBox mit Owner = Hauptfenster, damit sie nicht verloren geht
-        if ($Global:LastReportPath) {
-            $msg+="`n`nVergleichsbericht erstellt. Jetzt öffnen?"
-            if ([System.Windows.MessageBox]::Show($window, $msg, "Fertig", "YesNo", "Information") -eq "Yes") { Start-Process $Global:LastReportPath }
+        # Frage am Ende, ob das neue Dokument geöffnet werden soll
+        $newDocs=@($resultArr | Where-Object { $_.Success -eq $true -and $_.File -and (Test-Path $_.File) } | ForEach-Object { $_.File })
+        if ($newDocs.Count -gt 0) {
+            $msg+="`n`nDokument öffnen?"
+            if ([System.Windows.MessageBox]::Show($window, $msg, "Fertig", "YesNo", "Information") -eq "Yes") {
+                foreach ($doc in $newDocs) { Start-Process $doc }
+            }
         } else { [System.Windows.MessageBox]::Show($window, $msg, "Fertig", "OK", "Information")|Out-Null }
 
         # Fenster nach MessageBox wieder in den Vordergrund holen

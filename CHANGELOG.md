@@ -7,6 +7,18 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ---
 
+## [1.7.0] – 2026-09-30
+
+### Added
+- **Manuell nummerierte Standard-Absätze umwandeln** (`Repair-ManualNumberingHeadings`) – Absätze im Stil "Standard"/"Normal" mit manuell getippter Nummerierung (z.B. "2 Startinvestition", "2.1 Ziele") werden automatisch in "Überschrift N" umgewandelt. Ebene aus Gliederungstiefe ("2"→1, "2.1"→2). Schutz vor Fehltreffern: Tabellen, echte Listen/Auto-Nummerierung, Texte >150 Zeichen sowie Jahreszahlen/große Zahlen (>99) werden ignoriert.
+- **Verarbeitungsreihenfolge** – "Manuelle Nummerierung" läuft jetzt vor "Doppelte Nummern entfernen", damit frisch umgewandelte Überschriften direkt von der Duplikat-Bereinigung profitieren.
+
+### Changed
+- **GUI** – Checkbox umbenannt in "Manuelle Nummerierung" und in der Aktionen-Liste vor "Doppelte Nummern entfernen" sortiert.
+- **Script-Header** – Beschreibung um Umwandlung manueller Nummerierungen erweitert.
+
+---
+
 ## [1.6.0] – 2026-07-30
 
 ### Added
