@@ -7,6 +7,8 @@
 
 > **Batch-Formatierung und Qualitätssicherung für Microsoft Word-Dokumente**  
 > PowerShell-WPF-Tool zur automatisierten Reparatur von Überschriften, Tabellen, Nummerierungen, Links und Formatvorlagen in Word-Dokumenten (.docx/.doc).
+>
+> 🇬🇧 *Batch formatting and quality assurance for Microsoft Word documents – a PowerShell WPF tool for automated repair of headings, tables, numbering, links and styles in Word documents (.docx/.doc).*
 
 ---
 
@@ -32,22 +34,26 @@
 - Setzt Überschriften-Styles neu auf (Style-Neuaufsetzung)
 - Behebt Formatierungs-Müll durch direkte Formatierung
 - Erhält die bestehenden Style-Namen (Überschrift 1–9 / Heading 1–9)
+- 🇬🇧 *Re-applies heading styles 1–9 and removes direct formatting clutter.*
 
 ### 🔢 Levelsprung-Korrektur
 - Automatische Erkennung von Hierarchiesprüngen (z. B. Überschrift 1 → Überschrift 3)
 - Mehrstufige Korrektur (bis zu 3 Durchgänge)
 - Nachfolgende Nummerierung wird aktualisiert
+- 🇬🇧 *Auto-fixes hierarchy jumps (e.g. Heading 1 → Heading 3) in up to 3 passes.*
 
 ### 🔁 Doppelte Kapitelnummern entfernen
 - Erkennt manuell eingegebene Nummern am Überschrift-Anfang
 - Entfernt diese, wenn automatische Nummerierung aktiv ist
 - Verhindert doppelte Darstellung („1.1 1.1 Einleitung")
+- 🇬🇧 *Removes manually typed numbers when automatic numbering is active (e.g. "1.1 1.1 Intro").*
 
 ### 🔍 Fehlende Überschriften erkennen (`Repair-MissingHeadings`)
 - Erkennt Absätze im Stil „Standard", die trotzdem eine Kapitelnummerierung haben (Gliederungsebene 1–9)
 - Korrigiert den Stil automatisch auf „Überschrift N" / „Heading N"
 - Die Nummerierung (automatisches Nummerierungsfeld) bleibt unverändert erhalten
 - Hilfreich bei Dokumenten, deren Überschriften durch Kopieren/Einfügen den Stil verloren haben
+- 🇬🇧 *Detects "Standard" paragraphs that still carry an outline level 1–9 and restores the matching heading style.*
 
 ### 📊 Tabellen-Formatierung & Vorschau
 - Wähle einen beliebigen Tabellen-Style aus der gewählten Vorlage (.dotx/.dotm)
@@ -56,6 +62,7 @@
 - Automatische Aktivierung von Heading Rows, First Column, Row Bands
 - Entfernt vorherige direkte Tabellen-Formatierungen
 - Setzt Tabellen auf Seitenbreite (100 %)
+- 🇬🇧 *Applies a template table style to all tables, with live visual preview; sets tables to full page width.*
 
 ### 📑 Inhaltsverzeichnis aktualisieren
 - Aktualisiert alle TablesOfContents, TablesOfFigures
@@ -64,48 +71,56 @@
 - Bestehende Verzeichnisse werden gelöscht und neu erstellt – immer auf neuer Seite
 - Aktualisiert Kopf- und Fußzeilen-Felder
 - Seitenumbrüche werden neu berechnet (Repaginate)
+- 🇬🇧 *Updates TOCs/TOFs, (re)creates tables of tables/figures on new pages, refreshes fields and repaginates.*
 
 ### 🏷️ Tabellenbeschriftung
 - Fügt unter jeder Tabelle eine nummerierte Beschriftung ein: „Tabelle N: Kapitelüberschrift"
 - Verwendet **SEQ-Feldfunktionen** (fortlaufende Nummerierung, kompatibel mit Tabellenverzeichnis)
 - Kapiteltext wird automatisch aus der letzten Überschrift vor der Tabelle ermittelt
 - Vorhandene Beschriftungen werden erkannt und vor Neuerstellung entfernt (kein Doppeln)
+- 🇬🇧 *Adds numbered captions below tables ("Table N: chapter heading") using SEQ fields.*
 
 ### 🖼️ Abbildungsbeschriftung
 - Fügt unter jeder Inline-Abbildung eine nummerierte Beschriftung ein: „Abbildung N: Kapitelüberschrift"
 - Verwendet **SEQ-Feldfunktionen** (fortlaufende Nummerierung, kompatibel mit Abbildungsverzeichnis)
 - Beschriftung steht im eigenen Absatz – das Bild erscheint nicht im Abbildungsverzeichnis
 - Vorhandene Beschriftungen werden erkannt und vor Neuerstellung entfernt
+- 🇬🇧 *Adds numbered captions below inline figures ("Figure N: chapter heading") using SEQ fields.*
 
 ### 🔗 Link-Prüfer
 - Prüft alle Hyperlinks auf gültige Ziele
 - Erkennt fehlende Lesezeichen (interne Sprungziele)
 - Prüft Datei-Verknüpfungen auf Existenz
 - Findet tote Querverweise (REF-Felder ohne Ziel)
+- 🇬🇧 *Checks hyperlinks, bookmarks, file links and cross-references (REF fields) for dead targets.*
 
 ### ✏️ Manuelle Nummerierung fixen (`Repair-ManualNumberingHeadings` + `Test-ManualNumbering`)
 - Wandelt `Standard`-Absätze mit manuell getippter Nummerierung (z. B. „2 Startinvestition", „2.1 Ziele") in echte Überschriften um
 - Ebene aus Gliederungstiefe („2"→1, „2.1"→2, „2.1.3"→3)
 - Läuft vor „Doppelte Nummern entfernen", damit die Duplikat-Bereinigung direkt greift
 - Listet verbleibende manuell nummerierte Überschriften im Log auf
+- 🇬🇧 *Converts "Standard" paragraphs with manually typed numbering (e.g. "2 Project Start", "2.1 Goals") into real headings; level derived from depth ("2"→1, "2.1"→2). Runs before duplicate-number cleanup.*
 
 ### 📄 Formatvorlage „Standard" aus Vorlage übernehmen
 - Kopiert die vollständige Definition der Formatvorlage „Standard" (Normal) aus der gewählten .dotx/.dotm-Vorlage in jedes Dokument
 - Übernimmt Schriftart, -größe, -schnitt, Farbe, Absatzausrichtung, Zeilenabstand, Einzüge, Steuerungsoptionen (Widow/Orphan, Zusammenhalten) und Sprache
 - **Schützt die erste Seite** – die originale Formatierung der Titelseite bleibt erhalten
 - Funktioniert Dokument-übergreifend für konsistente Standardschrift im gesamten Batch
+- 🇬🇧 *Copies the "Standard" (Normal) style definition from the template into each document; page 1 (title page) is protected.*
 
 ### 📄 Kopf-/Fußzeilen aus Vorlage übernehmen
 - Kopiert alle Kopf- und Fußzeilen (Primär, Erste Seite, Gerade Seiten) aus der Vorlage in das Dokument
 - Übernimmt die Einstellungen "Different First Page" und "Gerade/Ungerade Seiten" von der Vorlage
 - Überschreibt alle Abschnitte des Dokuments mit den Inhalten aus der Vorlage
 - Ideal für einheitliche Briefköpfe, Firmenlogos und Seitennummerierung
+- 🇬🇧 *Clones all headers/footers (primary, first page, even pages) from the template into every section.*
 
 ### 📈 HTML-Vergleichsbericht
 - Automatische Erstellung nach der Batch-Verarbeitung
 - Vorher/Nachher-Vergleich (Levelsprünge, Duplikate, Tabellen)
 - Übersichtliches Dashboard mit Erfolgs-/Fehlerzähler
 - Wird nach Abschluss automatisch zur Ansicht angeboten
+- 🇬🇧 *Auto-generated HTML report with before/after comparison and success/error dashboard.*
 
 ### 🧹 Aufräum-Routine
 - Löscht alte Logs (Standard: >30 Tage)
@@ -156,6 +171,8 @@ Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope CurrentUser
 5. **🚀 Verarbeitung starten** – Batch läuft mit Live-Log und Fortschrittsanzeige
 6. **📈 Bericht prüfen** – Optionaler HTML-Vergleichsbericht
 
+> 🇬🇧 *1. Add documents → 2. pick a template → 3. choose a table style → 4. select actions → 5. start batch (live log + progress) → 6. review the HTML report.*
+
 ### GUI im Detail
 
 | Bereich | Beschreibung |
@@ -204,6 +221,8 @@ Der HTML-Vergleichsbericht zeigt pro Dokument:
 - **Dauer** pro Dokument
 
 Der Bericht wird unter `C:\ScriptLog\Reports\Vergleichsbericht_*.html` gespeichert.
+
+🇬🇧 *The HTML comparison report shows per document: status, headings, level jumps (before → after), duplicate numbers, manually numbered items, dead links, formatted tables/captions, applied styles, TOC updates and duration. Stored under `C:\ScriptLog\Reports\Vergleichsbericht_*.html`.*
 
 ---
 

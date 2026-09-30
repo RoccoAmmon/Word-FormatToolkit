@@ -11,11 +11,14 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 - **Manuell nummerierte Standard-Absätze umwandeln** (`Repair-ManualNumberingHeadings`) – Absätze im Stil "Standard"/"Normal" mit manuell getippter Nummerierung (z.B. "2 Startinvestition", "2.1 Ziele") werden automatisch in "Überschrift N" umgewandelt. Ebene aus Gliederungstiefe ("2"→1, "2.1"→2). Schutz vor Fehltreffern: Tabellen, echte Listen/Auto-Nummerierung, Texte >150 Zeichen sowie Jahreszahlen/große Zahlen (>99) werden ignoriert.
+- 🇬🇧 *Convert manually numbered Standard paragraphs into headings (`Repair-ManualNumberingHeadings`) – e.g. "2 Project Start" or "2.1 Goals" become "Heading N", level derived from depth ("2"→1, "2.1"→2). Skips tables, real lists/auto-numbering, texts >150 chars and year-like/large numbers (>99).*
 - **Verarbeitungsreihenfolge** – "Manuelle Nummerierung" läuft jetzt vor "Doppelte Nummern entfernen", damit frisch umgewandelte Überschriften direkt von der Duplikat-Bereinigung profitieren.
+- 🇬🇧 *Processing order – "Manual numbering" now runs before "Remove duplicate numbers" so freshly converted headings benefit from duplicate cleanup.*
 
 ### Changed
 - **GUI** – Checkbox umbenannt in "Manuelle Nummerierung" und in der Aktionen-Liste vor "Doppelte Nummern entfernen" sortiert.
 - **Script-Header** – Beschreibung um Umwandlung manueller Nummerierungen erweitert.
+- 🇬🇧 *GUI checkbox renamed to "Manuelle Nummerierung" and moved above "Remove duplicate numbers"; script header description extended.*
 
 ---
 
@@ -29,10 +32,13 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 - **Kopf-/Fußzeilen-Klon robust gemacht** – Zwei-Pass-Verfahren (erst entkoppeln, dann kopieren) eliminiert "Befehl nicht verfügbar"-Fehler bei verlinkten Abschnitten. Fallback auf `FormattedText` bei fehlgeschlagenem `Range.Paste`.
 - **Frei positionierte Grafiken in Kopf-/Fußzeilen** – Werden jetzt per `Range.Copy`/`Range.Paste` statt `FormattedText` übertragen, wodurch auch Shapes korrekt kopiert werden.
+- 🇬🇧 *Robust header/footer cloning – two-pass approach (unlink, then copy) fixes "command unavailable" errors; floating shapes are transferred via Range.Copy/Paste with FormattedText fallback.*
 
 ---
 
 ## [1.5.0] – 2026-07-30
+
+🇬🇧 *Clone headers/footers from the template (primary, first page, even pages) incl. DifferentFirstPage/OddAndEvenPages settings; new "Header/Footer" column in the HTML report.*
 
 ### Added
 - **Kopf-/Fußzeilen aus Vorlage übernehmen** – Alle Kopf- und Fußzeilen (Primär, Erste Seite, Gerade Seiten) werden aus der Vorlage in alle Abschnitte des Dokuments kopiert. Die Einstellungen "DifferentFirstPage" und "OddAndEvenPages" werden von der Vorlage übernommen.
@@ -44,6 +50,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ---
 
 ## [1.4.0] – 2026-07-29
+
+🇬🇧 *Apply the "Standard" (Normal) style from the template (title page protected), splash screen with live status, GUI responsiveness fixes.*
 
 ### Added
 - **„Standard" aus Vorlage übernehmen** – Die Formatvorlage "Standard" (Normal) wird aus der gewählten .dotx/.dotm-Vorlage in jedes Dokument kopiert. Schriftart, -größe, Absatzformatierung, Sprache u.v.m. werden übernommen
@@ -68,10 +76,13 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 - Erkennung bestehender Verzeichnisse per Feldcode-Regex (`\c "Tabelle"` / `\c "Abbildung"`)
+- 🇬🇧 *Page breaks before tables-of-tables/figures via PageBreakBefore; existing directories are rebuilt; figure captions live in their own paragraph.*
 
 ---
 
 ## [1.2.0] – 2026-07-25
+
+🇬🇧 *Automatic table/figure captions with SEQ fields plus tables of tables/figures; template font size is preserved.*
 
 ### Added
 - **Tabellenbeschriftung** – Automatische Beschriftung unter jeder Tabelle
@@ -91,6 +102,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ---
 
 ## [1.1.0] – 2026-07-11
+
+🇬🇧 *Visual table-style preview (Word CopyAsPicture + Win32 clipboard EMF extraction) with caching and a persistent Word instance.*
 
 ### Added
 - **Visuelle Tabellen-Style-Vorschau** in der GUI
@@ -114,6 +127,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ---
 
 ## [1.0.0] – 2026-07-10
+
+🇬🇧 *First release: WPF GUI with file management, template search, heading repair, level-jump fix, duplicate-number removal, table formatting, TOC update, link checker, manual-numbering detection, HTML comparison report, cleanup routine, live log and backups.*
 
 ### Added
 - **Erstveröffentlichung** des Word-Format-Toolkit

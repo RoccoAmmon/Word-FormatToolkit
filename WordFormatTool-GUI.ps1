@@ -3,7 +3,7 @@
     Word-Format-Toolkit – Batch-Formatierung und Qualitätssicherung für Microsoft Word-Dokumente.
 
 .DESCRIPTION
-    Ein leistungsstarkes PowerShell-WPF-Tool zur automatisierten Batch-Verarbeitung
+    DE: Ein leistungsstarkes PowerShell-WPF-Tool zur automatisierten Batch-Verarbeitung
     von Word-Dokumenten (.docx/.doc). Es repariert Überschriften, korrigiert
     Levelsprünge, entfernt doppelte Kapitelnummern, formatiert Tabellen nach
     Vorlagen-Styles, übernimmt die Formatvorlage „Standard" aus der Vorlage,
@@ -12,6 +12,14 @@
     Inhaltsverzeichnisse, prüft auf tote Links, wandelt manuell nummerierte
     Standard-Absätze in Überschriften um und erkennt manuelle Nummerierungen
     – alles mit Live-Log und Vergleichsbericht.
+    EN: A powerful PowerShell WPF tool for automated batch processing
+    of Word documents (.docx/.doc). It repairs headings, fixes level
+    jumps, removes duplicate chapter numbers, formats tables from template
+    styles, applies the "Standard" (Normal) style from the template,
+    inserts table/figure captions with SEQ fields, builds tables of
+    tables/figures, updates tables of contents, checks for dead links,
+    converts manually numbered Standard paragraphs into real headings
+    and detects manual numbering – all with live log and comparison report.
 
     Features:
     - WPF-GUI mit Drag & Drop, Dateiauswahl und Ordner-Import
@@ -35,6 +43,10 @@
     - Automatische Vorlagen-Suche in Registry + bekannten Pfaden
     - Aufräum-Routine für Logs, Reports und Backups
     - Detailliertes Live-Log im GUI-RichTextBox
+    EN features: WPF GUI with drag & drop, heading repair, level-jump fix,
+    duplicate-number removal, manual-numbering fix (Standard → heading),
+    table formatting + preview, SEQ captions, TOC/TOF handling, dead-link
+    check, template Standard-style + header/footer cloning, HTML report.
 
 .PARAMETER FunctionsOnly
     Lädt nur die Funktionen (für den Worker-Runspace), startet keine GUI.
