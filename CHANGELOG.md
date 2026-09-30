@@ -67,6 +67,10 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ---
 
+## [1.3.0] – 2026-07-28
+
+🇬🇧 *Page break before tables-of-tables/figures via PageBreakBefore; existing directories are rebuilt; figure captions live in their own paragraph; directory detection via field-code regex.*
+
 ### Fixed
 - **Seitenumbruch vor Tabellen-/Abbildungsverzeichnis** – `PageBreakBefore` auf der Überschrift statt Formfeed-Zeichen
 - **Bestehende Verzeichnisse** werden jetzt gelöscht und neu erstellt (mit korrektem Seitenumbruch)
