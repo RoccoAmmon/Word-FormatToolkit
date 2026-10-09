@@ -156,4 +156,4 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Splash-Screen beim Start
 - Konfigurierbare Extra-Template-Verzeichnisse
 
-[1.0.0]: https://github.com/RoccoAmmon/Word-FormatToolkit/releases/tag/v1.0
+[1.0.0]: https://gitlab.com/RoccoAmmon/Word-FormatToolkit/-/releases/v1.0

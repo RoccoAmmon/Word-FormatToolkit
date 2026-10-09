@@ -61,7 +61,7 @@
     Version : 1.7.0
     Lizenz  : MIT
     Aufruf  : .\WordFormatTool-GUI.ps1
-    Wiki    : https://github.com/RoccoAmmon/Word-FormatToolkit/wiki
+    Wiki    : https://gitlab.com/RoccoAmmon/Word-FormatToolkit/-/wikis
 #>
 
 param(

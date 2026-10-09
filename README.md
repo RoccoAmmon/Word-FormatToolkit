@@ -144,7 +144,7 @@
 
 ```powershell
 # 1. Repository klonen
-git clone https://github.com/RoccoAmmon/Word-FormatToolkit.git
+git clone https://gitlab.com/RoccoAmmon/Word-FormatToolkit.git
 cd Word-FormatToolkit
 
 # 2. Ausführungsrichtlinie (falls nötig)
@@ -293,9 +293,9 @@ Dieses Projekt ist unter der **MIT License** lizenziert – siehe [LICENSE](LICE
 
 **Rocco Ammon**
 
-- 🔗 GitHub: [@RoccoAmmon](https://github.com/RoccoAmmon)
-- 📧 Kontakt via [GitHub Issues](https://github.com/RoccoAmmon/Word-FormatToolkit/issues)
-- 🌍 Repository: [Word-FormatToolkit](https://github.com/RoccoAmmon/Word-FormatToolkit)
+- 🔗 GitLab: [@RoccoAmmon](https://gitlab.com/RoccoAmmon)
+- 📧 Kontakt via [GitLab Issues](https://gitlab.com/RoccoAmmon/Word-FormatToolkit/-/issues)
+- 🌍 Repository: [Word-FormatToolkit](https://gitlab.com/RoccoAmmon/Word-FormatToolkit)
 
 ---
 
